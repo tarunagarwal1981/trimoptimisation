@@ -1,151 +1,108 @@
 import streamlit as st
+import numpy as np
 import pandas as pd
-import math
-from pathlib import Path
+from sqlalchemy import create_engine
+from datetime import datetime, timedelta
+import urllib.parse
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# DB Configuration
+DB_CONFIG = {
+    'host': 'aws-0-ap-south-1.pooler.supabase.com',
+    'database': 'postgres',
+    'user': 'postgres.conrxbcvuogbzfysomov',
+    'password': 'wXAryCC8@iwNvj#',
+    'port': '6543'
+}
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Column names as provided
+COLUMN_NAMES = {
+    'VESSEL_NAME': 'VESSEL_NAME',
+    'REPORT_DATE': 'REPORT_DATE',
+    'ME_CONSUMPTION': 'ME_CONSUMPTION',
+    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
+    'SPEED': 'SPEED',
+    'DISPLACEMENT': 'DISPLACEMENT',
+    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
+    'WINDFORCE': 'WINDFORCE',
+    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
+    'LOAD_TYPE': 'LOAD_TYPE',
+    'DRAFTFWD': 'DRAFTFWD',
+    'DRAFTAFT': 'DRAFTAFT'
+}
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# Function to create DB engine
+def get_db_engine():
+    encoded_password = urllib.parse.quote(DB_CONFIG['password'])
+    db_url = f"postgresql+psycopg2://{DB_CONFIG['user']}:{encoded_password}@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}"
+    engine = create_engine(db_url)
+    return engine
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
+# Query the database for the vessel's last 1 year of data with wind force <= 4
+def get_vessel_data(vessel_name, engine):
+    query = f"""
+    SELECT * FROM sf_consumption_logs 
+    WHERE {COLUMN_NAMES['VESSEL_NAME']} = '{vessel_name}' 
+    AND {COLUMN_NAMES['REPORT_DATE']} >= '{datetime.now() - timedelta(days=365)}'
+    AND {COLUMN_NAMES['WINDFORCE']} <= 4
     """
+    data = pd.read_sql(query, engine)
+    return data
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+# Function to evaluate the model
+def evaluate_model(model, X_train, X_test, y_train, y_test):
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+    mae = mean_absolute_error(y_test, y_pred)
+    r2 = model.score(X_test, y_test)
+    return rmse, mae, r2
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+# Streamlit App for Vessel Data Input and Model Training
+st.title('Trim Optimization: Vessel Data-Based')
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+# Input vessel name
+vessel_name = st.text_input('Enter Vessel Name')
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+if st.button('Fetch Vessel Data'):
+    engine = get_db_engine()
+    vessel_data = get_vessel_data(vessel_name, engine)
 
-    return gdp_df
+    if vessel_data.empty:
+        st.write('No data found for this vessel or no data available for the past 1 year with wind force <= 4.')
+    else:
+        st.write(f"Data fetched for vessel: {vessel_name}")
+        st.dataframe(vessel_data)
 
-gdp_df = get_gdp_data()
+        # Preprocess the data, calculating trim as DRAFTAFT - DRAFTFWD
+        vessel_data['trim'] = vessel_data[COLUMN_NAMES['DRAFTAFT']] - vessel_data[COLUMN_NAMES['DRAFTFWD']]
+        features = [COLUMN_NAMES['SPEED'], COLUMN_NAMES['WINDFORCE'], 'trim', COLUMN_NAMES['DISPLACEMENT']]
+        target = COLUMN_NAMES['ME_CONSUMPTION']
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+        X = vessel_data[features]
+        y = vessel_data[target]
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+        # Split the data into train and test sets
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+        # Train and evaluate the model
+        model = RandomForestRegressor()
+        rmse, mae, r2 = evaluate_model(model, X_train, X_test, y_train, y_test)
 
-# Add some spacing
-''
-''
+        st.write(f'RMSE: {rmse:.4f}')
+        st.write(f'MAE: {mae:.4f}')
+        st.write(f'R² Score: {r2:.4f}')
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
+        # Trim Optimization Based on User Input
+        st.header('Trim Optimization')
+        speed = st.slider('Speed (knots)', min_value=5, max_value=20, value=10)
+        displacement = st.slider('Displacement (tonnes)', min_value=1000, max_value=20000, value=10000)
+        wind_force = st.slider('Wind Force (Beaufort Scale)', min_value=0, max_value=12, value=5)
+        forward_draft = st.slider('Forward Draft (m)', min_value=5.0, max_value=12.0, step=0.1)
+        aft_draft = st.slider('Aft Draft (m)', min_value=5.0, max_value=12.0, step=0.1)
 
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
+        trim = aft_draft - forward_draft
+        input_data = np.array([[speed, wind_force, trim, displacement]])
+        predicted_fuel_consumption = model.predict(input_data)
 
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+        st.write(f"Predicted Fuel Consumption: {predicted_fuel_consumption[0]:.2f} tons per hour")
+        st.write(f"Trim: {trim:.2f} meters")
