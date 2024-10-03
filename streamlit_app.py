@@ -48,7 +48,7 @@ def get_vessel_data(vessel_name, engine):
     # Use lower() on column and vessel name to avoid case sensitivity issues
     query = f"""
     SELECT * FROM sf_consumption_logs 
-    WHERE lower({COLUMN_NAMES['VESSEL_NAME']}) = upper('{vessel_name}') 
+    WHERE upper({COLUMN_NAMES['VESSEL_NAME']}) = upper('{vessel_name}') 
     AND {COLUMN_NAMES['REPORT_DATE']} >= '{datetime.now() - timedelta(days=365)}'
     AND {COLUMN_NAMES['WINDFORCE']} <= 4
     """
