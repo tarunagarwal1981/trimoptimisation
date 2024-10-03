@@ -2,5 +2,5 @@ streamlit    # Ensure compatibility with your version of Streamlit
 numpy          # For numerical computations
 pandas          # For handling data
 sqlalchemy     # For database connection
-psycopg2        # For PostgreSQL driver
+psycopg2-binary        # For PostgreSQL driver
 scikit-learn    # For machine learning models and metrics
