@@ -4,6 +4,9 @@ import pandas as pd
 from sqlalchemy import create_engine
 from datetime import datetime, timedelta
 import urllib.parse
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 # DB Configuration
 DB_CONFIG = {
@@ -39,13 +42,23 @@ def get_db_engine():
 
 # Query the database for the vessel's last 1 year of data with wind force <= 4
 def get_vessel_data(vessel_name, engine):
+    # Sanitize and ensure vessel name is in capital letters
+    vessel_name = vessel_name.strip().upper().replace("'", "''")  # Handling special characters and uppercasing
+
     query = f"""
     SELECT * FROM sf_consumption_logs 
     WHERE {COLUMN_NAMES['VESSEL_NAME']} = '{vessel_name}' 
     AND {COLUMN_NAMES['REPORT_DATE']} >= '{datetime.now() - timedelta(days=365)}'
     AND {COLUMN_NAMES['WINDFORCE']} <= 4
     """
-    data = pd.read_sql(query, engine)
+    
+    print(query)  # Print query for debugging
+
+    try:
+        data = pd.read_sql(query, engine)
+    except Exception as e:
+        st.error(f"Error executing query: {e}")
+        data = pd.DataFrame()  # Return an empty DataFrame if the query fails
     return data
 
 # Function to evaluate the model
@@ -64,45 +77,48 @@ st.title('Trim Optimization: Vessel Data-Based')
 vessel_name = st.text_input('Enter Vessel Name')
 
 if st.button('Fetch Vessel Data'):
-    engine = get_db_engine()
-    vessel_data = get_vessel_data(vessel_name, engine)
-
-    if vessel_data.empty:
-        st.write('No data found for this vessel or no data available for the past 1 year with wind force <= 4.')
+    if not vessel_name:
+        st.error("Please enter a valid vessel name.")
     else:
-        st.write(f"Data fetched for vessel: {vessel_name}")
-        st.dataframe(vessel_data)
+        engine = get_db_engine()
+        vessel_data = get_vessel_data(vessel_name, engine)
 
-        # Preprocess the data, calculating trim as DRAFTAFT - DRAFTFWD
-        vessel_data['trim'] = vessel_data[COLUMN_NAMES['DRAFTAFT']] - vessel_data[COLUMN_NAMES['DRAFTFWD']]
-        features = [COLUMN_NAMES['SPEED'], COLUMN_NAMES['WINDFORCE'], 'trim', COLUMN_NAMES['DISPLACEMENT']]
-        target = COLUMN_NAMES['ME_CONSUMPTION']
+        if vessel_data.empty:
+            st.write(f'No data found for vessel: {vessel_name} with wind force <= 4 in the past year.')
+        else:
+            st.write(f"Data fetched for vessel: {vessel_name}")
+            st.dataframe(vessel_data)
 
-        X = vessel_data[features]
-        y = vessel_data[target]
+            # Preprocess the data, calculating trim as DRAFTAFT - DRAFTFWD
+            vessel_data['trim'] = vessel_data[COLUMN_NAMES['DRAFTAFT']] - vessel_data[COLUMN_NAMES['DRAFTFWD']]
+            features = [COLUMN_NAMES['SPEED'], COLUMN_NAMES['WINDFORCE'], 'trim', COLUMN_NAMES['DISPLACEMENT']]
+            target = COLUMN_NAMES['ME_CONSUMPTION']
 
-        # Split the data into train and test sets
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+            X = vessel_data[features]
+            y = vessel_data[target]
 
-        # Train and evaluate the model
-        model = RandomForestRegressor()
-        rmse, mae, r2 = evaluate_model(model, X_train, X_test, y_train, y_test)
+            # Split the data into train and test sets
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
-        st.write(f'RMSE: {rmse:.4f}')
-        st.write(f'MAE: {mae:.4f}')
-        st.write(f'R² Score: {r2:.4f}')
+            # Train and evaluate the model
+            model = RandomForestRegressor()
+            rmse, mae, r2 = evaluate_model(model, X_train, X_test, y_train, y_test)
 
-        # Trim Optimization Based on User Input
-        st.header('Trim Optimization')
-        speed = st.slider('Speed (knots)', min_value=5, max_value=20, value=10)
-        displacement = st.slider('Displacement (tonnes)', min_value=1000, max_value=20000, value=10000)
-        wind_force = st.slider('Wind Force (Beaufort Scale)', min_value=0, max_value=12, value=5)
-        forward_draft = st.slider('Forward Draft (m)', min_value=5.0, max_value=12.0, step=0.1)
-        aft_draft = st.slider('Aft Draft (m)', min_value=5.0, max_value=12.0, step=0.1)
+            st.write(f'RMSE: {rmse:.4f}')
+            st.write(f'MAE: {mae:.4f}')
+            st.write(f'R² Score: {r2:.4f}')
 
-        trim = aft_draft - forward_draft
-        input_data = np.array([[speed, wind_force, trim, displacement]])
-        predicted_fuel_consumption = model.predict(input_data)
+            # Trim Optimization Based on User Input
+            st.header('Trim Optimization')
+            speed = st.slider('Speed (knots)', min_value=5, max_value=20, value=10)
+            displacement = st.slider('Displacement (tonnes)', min_value=1000, max_value=20000, value=10000)
+            wind_force = st.slider('Wind Force (Beaufort Scale)', min_value=0, max_value=12, value=5)
+            forward_draft = st.slider('Forward Draft (m)', min_value=5.0, max_value=12.0, step=0.1)
+            aft_draft = st.slider('Aft Draft (m)', min_value=5.0, max_value=12.0, step=0.1)
 
-        st.write(f"Predicted Fuel Consumption: {predicted_fuel_consumption[0]:.2f} tons per hour")
-        st.write(f"Trim: {trim:.2f} meters")
+            trim = aft_draft - forward_draft
+            input_data = np.array([[speed, wind_force, trim, displacement]])
+            predicted_fuel_consumption = model.predict(input_data)
+
+            st.write(f"Predicted Fuel Consumption: {predicted_fuel_consumption[0]:.2f} tons per hour")
+            st.write(f"Trim: {trim:.2f} meters")
