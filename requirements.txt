@@ -1,6 +1,6 @@
-streamlit==1.25.0      # Ensure compatibility with your version of Streamlit
-numpy==1.24.3          # For numerical computations
-pandas==2.0.3          # For handling data
-sqlalchemy==2.0.19     # For database connection
-psycopg2==2.9.6        # For PostgreSQL driver
-scikit-learn==1.3.0    # For machine learning models and metrics
+streamlit    # Ensure compatibility with your version of Streamlit
+numpy          # For numerical computations
+pandas          # For handling data
+sqlalchemy     # For database connection
+psycopg2        # For PostgreSQL driver
+scikit-learn    # For machine learning models and metrics
