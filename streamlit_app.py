@@ -41,16 +41,17 @@ def get_db_engine():
     return engine
 
 # Query the database for the vessel's last 1 year of data with wind force <= 4
+# Query the database for the vessel's last 1 year of data with wind force <= 4
 def get_vessel_data(vessel_name, engine):
     # Sanitize and ensure vessel name is in capital letters
     vessel_name = vessel_name.strip().upper().replace("'", "''")  # Handling special characters and uppercasing
 
-    # Use lower() on column and vessel name to avoid case sensitivity issues
+    # Use double quotes around column names to avoid case sensitivity issues
     query = f"""
     SELECT * FROM sf_consumption_logs 
-    WHERE ({COLUMN_NAMES['VESSEL_NAME']}) = upper('{vessel_name}') 
-    AND {COLUMN_NAMES['REPORT_DATE']} >= '{datetime.now() - timedelta(days=365)}'
-    AND {COLUMN_NAMES['WINDFORCE']} <= 4
+    WHERE "VESSEL_NAME" = upper('{vessel_name}') 
+    AND "REPORT_DATE" >= '{datetime.now() - timedelta(days=365)}'
+    AND "WINDFORCE" <= 4
     """
     
     print(query)  # Print query for debugging
@@ -61,6 +62,7 @@ def get_vessel_data(vessel_name, engine):
         st.error(f"Error executing query: {e}")
         data = pd.DataFrame()  # Return an empty DataFrame if the query fails
     return data
+
 
 # Function to evaluate the model
 def evaluate_model(model, X_train, X_test, y_train, y_test):
