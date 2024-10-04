@@ -4,3 +4,4 @@ pandas          # For handling data
 sqlalchemy     # For database connection
 psycopg2-binary        # For PostgreSQL driver
 scikit-learn    # For machine learning models and metrics
+scipy
