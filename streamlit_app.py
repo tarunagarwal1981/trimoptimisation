@@ -7,7 +7,7 @@ import urllib.parse
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-from scipy.optimize import minimize  # Import optimization method
+from scipy.optimize import minimize
 
 # DB Configuration
 DB_CONFIG = {
@@ -59,14 +59,12 @@ def get_vessel_data(vessel_name, engine):
         data = pd.DataFrame()  # Return an empty DataFrame if the query fails
     return data
 
-# Function to evaluate the model
-def evaluate_model(model, X_train, X_test, y_train, y_test):
+# Function to evaluate the model and cache it to avoid retraining
+@st.cache_data(show_spinner=False)
+def train_model(X_train, y_train):
+    model = RandomForestRegressor()
     model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
-    rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-    mae = mean_absolute_error(y_test, y_pred)
-    r2 = model.score(X_test, y_test)
-    return rmse, mae, r2
+    return model
 
 # Function to optimize trim by finding the best forward and aft drafts
 def optimize_trim(model, speed, displacement, wind_force):
@@ -120,9 +118,14 @@ if st.button('Fetch Vessel Data'):
             # Split the data into train and test sets
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
 
-            # Train and evaluate the model
-            model = RandomForestRegressor()
-            rmse, mae, r2 = evaluate_model(model, X_train, X_test, y_train, y_test)
+            # Cache the trained model in session state
+            model = train_model(X_train, y_train)
+
+            # Display model performance
+            y_pred = model.predict(X_test)
+            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+            mae = mean_absolute_error(y_test, y_pred)
+            r2 = model.score(X_test, y_test)
 
             st.write(f'RMSE: {rmse:.4f}')
             st.write(f'MAE: {mae:.4f}')
@@ -135,8 +138,8 @@ if st.button('Fetch Vessel Data'):
             wind_force = st.slider('Wind Force (Beaufort Scale)', min_value=0, max_value=12, value=5)
 
             # Run optimization to find the best forward and aft drafts
-            optimal_drafts, min_fuel_consumption = optimize_trim(model, speed, displacement, wind_force)
-
-            st.write(f"Optimal Forward Draft: {optimal_drafts[0]:.2f} meters")
-            st.write(f"Optimal Aft Draft: {optimal_drafts[1]:.2f} meters")
-            st.write(f"Minimum Fuel Consumption: {min_fuel_consumption:.2f} tons per hour")
+            if st.button('Optimize Trim'):
+                optimal_drafts, min_fuel_consumption = optimize_trim(model, speed, displacement, wind_force)
+                st.write(f"Optimal Forward Draft: {optimal_drafts[0]:.2f} meters")
+                st.write(f"Optimal Aft Draft: {optimal_drafts[1]:.2f} meters")
+                st.write(f"Minimum Fuel Consumption: {min_fuel_consumption:.2f} tons per hour")
