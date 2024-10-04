@@ -7,6 +7,7 @@ import urllib.parse
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
+from scipy.optimize import minimize  # Import optimization method
 
 # DB Configuration
 DB_CONFIG = {
@@ -41,12 +42,9 @@ def get_db_engine():
     return engine
 
 # Query the database for the vessel's last 1 year of data with wind force <= 4
-# Query the database for the vessel's last 1 year of data with wind force <= 4
 def get_vessel_data(vessel_name, engine):
-    # Sanitize and ensure vessel name is in capital letters
     vessel_name = vessel_name.strip().upper().replace("'", "''")  # Handling special characters and uppercasing
 
-    # Use double quotes around column names to avoid case sensitivity issues
     query = f"""
     SELECT * FROM sf_consumption_logs 
     WHERE "VESSEL_NAME" = upper('{vessel_name}') 
@@ -54,15 +52,12 @@ def get_vessel_data(vessel_name, engine):
     AND "WINDFORCE" <= 4
     """
     
-    print(query)  # Print query for debugging
-
     try:
         data = pd.read_sql(query, engine)
     except Exception as e:
         st.error(f"Error executing query: {e}")
         data = pd.DataFrame()  # Return an empty DataFrame if the query fails
     return data
-
 
 # Function to evaluate the model
 def evaluate_model(model, X_train, X_test, y_train, y_test):
@@ -72,6 +67,28 @@ def evaluate_model(model, X_train, X_test, y_train, y_test):
     mae = mean_absolute_error(y_test, y_pred)
     r2 = model.score(X_test, y_test)
     return rmse, mae, r2
+
+# Function to optimize trim by finding the best forward and aft drafts
+def optimize_trim(model, speed, displacement, wind_force):
+    # Define the objective function: fuel consumption based on forward and aft drafts
+    def objective(drafts):
+        forward_draft, aft_draft = drafts
+        trim = aft_draft - forward_draft
+        input_data = np.array([[speed, wind_force, trim, displacement]])
+        predicted_fuel_consumption = model.predict(input_data)
+        return predicted_fuel_consumption[0]  # Minimize this value
+
+    # Initial guess for the drafts (mid-range values)
+    initial_guess = [7.0, 9.0]  # Example starting points for fwd and aft draft
+
+    # Boundaries for forward and aft drafts (min and max values)
+    bounds = [(5.0, 12.0), (5.0, 12.0)]  # Fwd and aft draft bounds
+
+    # Run the optimization
+    result = minimize(objective, initial_guess, bounds=bounds, method='L-BFGS-B')
+
+    # Return the optimal drafts and the corresponding fuel consumption
+    return result.x, result.fun  # Optimal drafts and minimum fuel consumption
 
 # Streamlit App for Vessel Data Input and Model Training
 st.title('Trim Optimization: Vessel Data-Based')
@@ -116,12 +133,10 @@ if st.button('Fetch Vessel Data'):
             speed = st.slider('Speed (knots)', min_value=5, max_value=20, value=10)
             displacement = st.slider('Displacement (tonnes)', min_value=1000, max_value=20000, value=10000)
             wind_force = st.slider('Wind Force (Beaufort Scale)', min_value=0, max_value=12, value=5)
-            forward_draft = st.slider('Forward Draft (m)', min_value=5.0, max_value=12.0, step=0.1)
-            aft_draft = st.slider('Aft Draft (m)', min_value=5.0, max_value=12.0, step=0.1)
 
-            trim = aft_draft - forward_draft
-            input_data = np.array([[speed, wind_force, trim, displacement]])
-            predicted_fuel_consumption = model.predict(input_data)
+            # Run optimization to find the best forward and aft drafts
+            optimal_drafts, min_fuel_consumption = optimize_trim(model, speed, displacement, wind_force)
 
-            st.write(f"Predicted Fuel Consumption: {predicted_fuel_consumption[0]:.2f} tons per hour")
-            st.write(f"Trim: {trim:.2f} meters")
+            st.write(f"Optimal Forward Draft: {optimal_drafts[0]:.2f} meters")
+            st.write(f"Optimal Aft Draft: {optimal_drafts[1]:.2f} meters")
+            st.write(f"Minimum Fuel Consumption: {min_fuel_consumption:.2f} tons per hour")
