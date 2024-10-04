@@ -109,6 +109,7 @@ if st.session_state.vessel_data is not None:
     features = [COLUMN_NAMES['SPEED'], COLUMN_NAMES['WINDFORCE'], 'trim', COLUMN_NAMES['DISPLACEMENT']]
     target = COLUMN_NAMES['ME_CONSUMPTION']
 
+    # Filter the data for the selected vessel
     X = vessel_data[features]
     y = vessel_data[target]
 
