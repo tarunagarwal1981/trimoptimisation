@@ -9,6 +9,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.svm import SVR
 from sklearn.metrics import mean_squared_error, r2_score
+from scipy.optimize import minimize
 
 # DB Configuration
 DB_CONFIG = {
@@ -23,12 +24,9 @@ COLUMN_NAMES = {
     'VESSEL_NAME': 'VESSEL_NAME',
     'REPORT_DATE': 'REPORT_DATE',
     'ME_CONSUMPTION': 'ME_CONSUMPTION',
-    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
     'SPEED': 'SPEED',
-    'DISPLACEMENT': 'DISPLACEMENT',
-    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
     'WINDFORCE': 'WINDFORCE',
-    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
+    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
     'LOAD_TYPE': 'LOAD_TYPE',
     'DRAFTFWD': 'DRAFTFWD',
     'DRAFTAFT': 'DRAFTAFT'
@@ -39,7 +37,7 @@ def fetch_data(vessel_name):
     try:
         conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
         query = f"""
-        SELECT * FROM sf_consumption_logs
+        SELECT {', '.join(COLUMN_NAMES.values())} FROM sf_consumption_logs
         WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
         AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
         AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
@@ -47,11 +45,8 @@ def fetch_data(vessel_name):
         df = pd.read_sql_query(query, conn, params=(vessel_name,))
         conn.close()
         return df
-    except OperationalError as e:
-        st.error(f"Database connection error: {e}")
-        return pd.DataFrame()
-    except PSQLError as e:
-        st.error(f"Database query error: {e}")
+    except (OperationalError, PSQLError) as e:
+        st.error(f"Database error: {e}")
         return pd.DataFrame()
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
@@ -59,12 +54,13 @@ def fetch_data(vessel_name):
 
 def preprocess_data(df):
     df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
-    df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']].astype(float) > 0) &
-            (df[COLUMN_NAMES['SPEED']].astype(float) > 0) &
-            (df[COLUMN_NAMES['DRAFTFWD']].astype(float) > 0) &
-            (df[COLUMN_NAMES['DRAFTAFT']].astype(float) > 0)]
+    numeric_columns = [COLUMN_NAMES['ME_CONSUMPTION'], COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]
+    df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors='coerce')
+    df = df.dropna(subset=numeric_columns)
+    df = df[df[numeric_columns] > 0]
     return df
 
+@st.cache_resource
 def train_and_evaluate_models(X, y):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
@@ -73,7 +69,7 @@ def train_and_evaluate_models(X, y):
     X_test_scaled = scaler.transform(X_test)
     
     models = {
-        'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
+        'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42, n_jobs=-1),
         'Linear Regression': LinearRegression(),
         'SVR': SVR(kernel='rbf')
     }
@@ -90,68 +86,49 @@ def train_and_evaluate_models(X, y):
     return results
 
 def optimize_drafts(model, scaler, speed):
-    best_consumption = float('inf')
-    best_drafts = None
+    def objective(drafts):
+        fwd, aft = drafts
+        X = scaler.transform([[speed, fwd, aft]])
+        return model.predict(X)[0]
     
-    for fwd in np.arange(4, 15, 0.1):
-        for aft in np.arange(4, 15, 0.1):
-            X = scaler.transform([[speed, fwd, aft]])
-            consumption = model.predict(X)[0]
-            
-            if consumption < best_consumption:
-                best_consumption = consumption
-                best_drafts = (fwd, aft)
-    
-    return best_drafts, best_consumption
+    bounds = [(4, 15), (4, 15)]
+    result = minimize(objective, [7, 7], bounds=bounds, method='L-BFGS-B')
+    return result.x, result.fun
 
 st.title("Vessel Draft Optimization")
+
+@st.cache_data
+def load_and_process_data(vessel_name):
+    df = fetch_data(vessel_name)
+    if not df.empty:
+        df = preprocess_data(df)
+        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
+        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
+        return df_ballast, df_laden
+    return pd.DataFrame(), pd.DataFrame()
 
 vessel_name = st.text_input("Enter Vessel Name:")
 
 if vessel_name:
-    df = fetch_data(vessel_name)
+    df_ballast, df_laden = load_and_process_data(vessel_name)
     
-    if df.empty:
+    if df_ballast.empty and df_laden.empty:
         st.warning("No data retrieved. Please check the vessel name and try again.")
     else:
-        df = preprocess_data(df)
-        
-        # Separate ballast and laden conditions
-        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
-        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
-        
-        # Train models for ballast condition
-        if not df_ballast.empty:
-            X_ballast = df_ballast[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
-            y_ballast = df_ballast[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
-            ballast_results = train_and_evaluate_models(X_ballast, y_ballast)
-            
-            st.subheader("Ballast Condition Results:")
-            for name, result in ballast_results.items():
-                st.write(f"{name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
-            
-            st.subheader("Optimized Drafts for Ballast Condition:")
-            best_model_ballast = min(ballast_results.items(), key=lambda x: x[1]['MSE'])[1]
-            for speed in [10, 11, 12]:
-                best_drafts, best_consumption = optimize_drafts(best_model_ballast['Model'], best_model_ballast['Scaler'], speed)
-                st.write(f"Speed: {speed} knots, Best Drafts: FWD = {best_drafts[0]:.2f}, AFT = {best_drafts[1]:.2f}, Estimated Consumption: {best_consumption:.2f}")
-        else:
-            st.warning("No data available for ballast condition.")
-        
-        # Train models for laden condition
-        if not df_laden.empty:
-            X_laden = df_laden[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
-            y_laden = df_laden[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
-            laden_results = train_and_evaluate_models(X_laden, y_laden)
-            
-            st.subheader("Laden Condition Results:")
-            for name, result in laden_results.items():
-                st.write(f"{name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
-            
-            st.subheader("Optimized Drafts for Laden Condition:")
-            best_model_laden = min(laden_results.items(), key=lambda x: x[1]['MSE'])[1]
-            for speed in [10, 11, 12]:
-                best_drafts, best_consumption = optimize_drafts(best_model_laden['Model'], best_model_laden['Scaler'], speed)
-                st.write(f"Speed: {speed} knots, Best Drafts: FWD = {best_drafts[0]:.2f}, AFT = {best_drafts[1]:.2f}, Estimated Consumption: {best_consumption:.2f}")
-        else:
-            st.warning("No data available for laden condition.")
+        for condition, df in [("Ballast", df_ballast), ("Laden", df_laden)]:
+            if not df.empty:
+                st.subheader(f"{condition} Condition Results:")
+                X = df[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
+                y = df[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
+                results = train_and_evaluate_models(X, y)
+                
+                for name, result in results.items():
+                    st.write(f"{name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
+                
+                st.subheader(f"Optimized Drafts for {condition} Condition:")
+                best_model = min(results.items(), key=lambda x: x[1]['MSE'])[1]
+                for speed in [10, 11, 12]:
+                    best_drafts, best_consumption = optimize_drafts(best_model['Model'], best_model['Scaler'], speed)
+                    st.write(f"Speed: {speed} knots, Best Drafts: FWD = {best_drafts[0]:.2f}, AFT = {best_drafts[1]:.2f}, Estimated Consumption: {best_consumption:.2f}")
+            else:
+                st.warning(f"No data available for {condition.lower()} condition.")
