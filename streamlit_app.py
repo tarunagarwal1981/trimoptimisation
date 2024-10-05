@@ -2,12 +2,15 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import psycopg2
-from psycopg2 import OperationalError, Error as PSQLError
+from psycopg2 import pool
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.svm import SVR
 from sklearn.metrics import mean_squared_error, r2_score
-from xgboost import XGBRegressor
+from scipy.optimize import minimize
+import multiprocessing
 
 # DB Configuration
 DB_CONFIG = {
@@ -17,6 +20,14 @@ DB_CONFIG = {
     'password': 'wXAryCC8@iwNvj#',
     'port': '6543'
 }
+
+# Database connection pooling
+try:
+    connection_pool = psycopg2.pool.SimpleConnectionPool(1, 10, **DB_CONFIG)
+    if connection_pool:
+        st.info("Connection pool created successfully")
+except Exception as e:
+    st.error(f"Error creating connection pool: {e}")
 
 COLUMN_NAMES = {
     'VESSEL_NAME': 'VESSEL_NAME',
@@ -36,32 +47,25 @@ COLUMN_NAMES = {
 @st.cache_data
 def fetch_data(vessel_name):
     try:
-        conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
+        conn = connection_pool.getconn()
         query = f"""
-        SELECT * FROM sf_consumption_logs
+        SELECT {', '.join(COLUMN_NAMES.values())} FROM sf_consumption_logs
         WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
         AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
         AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
+        LIMIT 10000
         """
         df = pd.read_sql_query(query, conn, params=(vessel_name,))
-        conn.close()
+        connection_pool.putconn(conn)
         return df
-    except OperationalError as e:
-        st.error(f"Database connection error: {e}")
-        return pd.DataFrame()
-    except PSQLError as e:
-        st.error(f"Database query error: {e}")
-        return pd.DataFrame()
     except Exception as e:
-        st.error(f"An unexpected error occurred: {e}")
+        st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
 def preprocess_data(df):
     df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
-    df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']].astype(float) > 0) &
-            (df[COLUMN_NAMES['SPEED']].astype(float) > 0) &
-            (df[COLUMN_NAMES['DRAFTFWD']].astype(float) > 0) &
-            (df[COLUMN_NAMES['DRAFTAFT']].astype(float) > 0)]
+    df = df.apply(pd.to_numeric, errors='coerce')
+    df = df.dropna(subset=[COLUMN_NAMES['ME_CONSUMPTION'], COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']])
     return df
 
 def train_and_evaluate_models(X, y):
@@ -72,36 +76,41 @@ def train_and_evaluate_models(X, y):
     X_test_scaled = scaler.transform(X_test)
     
     models = {
-        'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
-        'Gradient Boosting': GradientBoostingRegressor(n_estimators=100, random_state=42),
-        'XGBoost': XGBRegressor(n_estimators=100, random_state=42)
+        'Random Forest': RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1),  # Reduced n_estimators for faster training
+        'Linear Regression': LinearRegression(n_jobs=-1),
+        'SVR': SVR(kernel='rbf')
     }
     
     results = {}
     
-    for name, model in models.items():
+    def train_model(name, model):
         model.fit(X_train_scaled, y_train)
         y_pred = model.predict(X_test_scaled)
         mse = mean_squared_error(y_test, y_pred)
         r2 = r2_score(y_test, y_pred)
         results[name] = {'MSE': mse, 'R2': r2, 'Model': model, 'Scaler': scaler}
     
+    processes = []
+    for name, model in models.items():
+        p = multiprocessing.Process(target=train_model, args=(name, model))
+        processes.append(p)
+        p.start()
+    
+    for p in processes:
+        p.join()
+    
     return results
 
 def optimize_drafts(model, scaler, speed):
-    best_consumption = float('inf')
-    best_drafts = None
+    def objective(drafts):
+        fwd, aft = drafts
+        X = scaler.transform([[speed, fwd, aft]])
+        return model.predict(X)[0]
     
-    for fwd in np.arange(4, 15, 0.1):
-        for aft in np.arange(4, 15, 0.1):
-            X = scaler.transform([[speed, fwd, aft]])
-            consumption = model.predict(X)[0]
-            
-            if consumption < best_consumption:
-                best_consumption = consumption
-                best_drafts = (fwd, aft)
-    
-    return best_drafts, best_consumption
+    bounds = [(4, 15), (4, 15)]  # Forward and aft draft bounds
+    initial_guess = [7, 7]
+    result = minimize(objective, initial_guess, bounds=bounds, method='L-BFGS-B')
+    return result.x, result.fun
 
 st.title("Vessel Draft Optimization")
 
