@@ -61,9 +61,19 @@ def fetch_data(vessel_name):
 def preprocess_data(df):
     df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
     numeric_columns = [COLUMN_NAMES['ME_CONSUMPTION'], COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]
-    df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors='coerce')
+    
+    for col in numeric_columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    
     df = df.dropna(subset=numeric_columns)
-    df = df[df[numeric_columns] > 0]
+    df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']] > 0) & 
+            (df[COLUMN_NAMES['SPEED']] > 0) & 
+            (df[COLUMN_NAMES['DRAFTFWD']] > 0) & 
+            (df[COLUMN_NAMES['DRAFTAFT']] > 0)]
+    
+    # Remove infinite values
+    df = df.replace([np.inf, -np.inf], np.nan).dropna(subset=numeric_columns)
+    
     return df
 
 @st.cache_resource
@@ -113,24 +123,31 @@ if vessel_name:
     else:
         df = preprocess_data(df)
         
-        # Separate ballast and laden conditions
-        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
-        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
-        
-        for condition, data in [("Ballast", df_ballast), ("Laden", df_laden)]:
-            if not data.empty:
-                st.subheader(f"{condition} Condition Results:")
-                X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
-                y = data[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
-                results = train_and_evaluate_models(X, y)
-                
-                for name, result in results.items():
-                    st.write(f"{name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
-                
-                st.subheader(f"Optimized Drafts for {condition} Condition:")
-                best_model = min(results.items(), key=lambda x: x[1]['MSE'])[1]
-                for speed in [10, 11, 12]:
-                    best_drafts, best_consumption = optimize_drafts(best_model['Model'], best_model['Scaler'], speed)
-                    st.write(f"Speed: {speed} knots, Best Drafts: FWD = {best_drafts[0]:.2f}, AFT = {best_drafts[1]:.2f}, Estimated Consumption: {best_consumption:.2f}")
-            else:
-                st.warning(f"No data available for {condition.lower()} condition.")
+        if df.empty:
+            st.warning("After preprocessing, no valid data remains. Please check the data quality.")
+        else:
+            # Separate ballast and laden conditions
+            df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
+            df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
+            
+            for condition, data in [("Ballast", df_ballast), ("Laden", df_laden)]:
+                if not data.empty:
+                    st.subheader(f"{condition} Condition Results:")
+                    X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
+                    y = data[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
+                    
+                    try:
+                        results = train_and_evaluate_models(X, y)
+                        
+                        for name, result in results.items():
+                            st.write(f"{name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
+                        
+                        st.subheader(f"Optimized Drafts for {condition} Condition:")
+                        best_model = min(results.items(), key=lambda x: x[1]['MSE'])[1]
+                        for speed in [10, 11, 12]:
+                            best_drafts, best_consumption = optimize_drafts(best_model['Model'], best_model['Scaler'], speed)
+                            st.write(f"Speed: {speed} knots, Best Drafts: FWD = {best_drafts[0]:.2f}, AFT = {best_drafts[1]:.2f}, Estimated Consumption: {best_consumption:.2f}")
+                    except Exception as e:
+                        st.error(f"An error occurred during model training for {condition} condition: {e}")
+                else:
+                    st.warning(f"No data available for {condition.lower()} condition.")
