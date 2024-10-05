@@ -9,9 +9,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from xgboost import XGBRegressor
-from lightgbm import LGBMRegressor
-from scipy.optimize import minimize
 
 # DB Configuration
 DB_CONFIG = {
@@ -73,7 +70,6 @@ def preprocess_data(df):
     
     df['TRIM'] = df[COLUMN_NAMES['DRAFTAFT']] - df[COLUMN_NAMES['DRAFTFWD']]
     df['MEAN_DRAFT'] = (df[COLUMN_NAMES['DRAFTAFT']] + df[COLUMN_NAMES['DRAFTFWD']]) / 2
-    df['DRAFT_RATIO'] = df[COLUMN_NAMES['DRAFTFWD']] / df[COLUMN_NAMES['DRAFTAFT']]
     
     return df
 
@@ -117,22 +113,14 @@ def plot_data(df):
     st.plotly_chart(fig_3d)
 
 @st.cache_resource
-def train_model(X, y, model_name):
+def train_random_forest(X, y):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    if model_name == 'Random Forest':
-        model = RandomForestRegressor(n_estimators=100, random_state=42)
-    elif model_name == 'XGBoost':
-        model = XGBRegressor(random_state=42)
-    elif model_name == 'LightGBM':
-        model = LGBMRegressor(random_state=42)
-    else:
-        raise ValueError("Invalid model name")
-    
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
     model.fit(X_train_scaled, y_train)
     
     y_pred = model.predict(X_test_scaled)
@@ -142,17 +130,21 @@ def train_model(X, y, model_name):
     return {'MSE': mse, 'R2': r2, 'Model': model, 'Scaler': scaler}
 
 def optimize_drafts(model, scaler, speed, displacement):
-    def objective(x):
-        fwd, aft = x
-        trim = aft - fwd
-        mean_draft = (fwd + aft) / 2
-        X = scaler.transform([[speed, fwd, aft, displacement, trim, mean_draft, fwd/aft]])
-        return model.predict(X)[0]
+    best_consumption = float('inf')
+    best_drafts = None
     
-    bounds = ((4, 15), (4, 15))
-    result = minimize(objective, [10, 10], method='L-BFGS-B', bounds=bounds)
+    for fwd in np.arange(4, 15, 0.1):
+        for aft in np.arange(4, 15, 0.1):
+            trim = aft - fwd
+            mean_draft = (fwd + aft) / 2
+            X = scaler.transform([[speed, fwd, aft, displacement, trim, mean_draft]])
+            consumption = model.predict(X)[0]
+            
+            if consumption < best_consumption:
+                best_consumption = consumption
+                best_drafts = (fwd, aft)
     
-    return result.x, result.fun
+    return best_drafts, best_consumption
 
 def generate_optimization_table(model, scaler, condition, displacement):
     speeds = range(9, 15)
@@ -173,12 +165,6 @@ def generate_optimization_table(model, scaler, condition, displacement):
 
 st.title("Vessel Draft Optimization")
 
-# Sidebar for model selection
-model_name = st.sidebar.selectbox(
-    "Select Model",
-    ("Random Forest", "XGBoost", "LightGBM")
-)
-
 vessel_name = st.text_input("Enter Vessel Name:")
 
 if vessel_name:
@@ -191,7 +177,7 @@ if vessel_name:
         df = preprocess_data(df)
         
         st.subheader("Data Overview")
-        st.dataframe(df[list(COLUMN_NAMES.values()) + ['TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']])
+        st.dataframe(df[list(COLUMN_NAMES.values()) + ['TRIM', 'MEAN_DRAFT']])
         
         plot_data(df)
         
@@ -203,13 +189,13 @@ if vessel_name:
             if not data.empty:
                 st.subheader(f"{condition} Condition Analysis")
                 X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT'], 
-                          COLUMN_NAMES['DISPLACEMENT'], 'TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']]
+                          COLUMN_NAMES['DISPLACEMENT'], 'TRIM', 'MEAN_DRAFT']]
                 y = data[COLUMN_NAMES['ME_CONSUMPTION']]
                 
-                with st.spinner(f"Training {model_name} model for {condition} condition..."):
-                    result = train_model(X, y, model_name)
+                with st.spinner(f"Training Random Forest model for {condition} condition..."):
+                    result = train_random_forest(X, y)
                 
-                st.write(f"{model_name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
+                st.write(f"Random Forest: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
                 
                 avg_displacement = data[COLUMN_NAMES['DISPLACEMENT']].mean()
                 generate_optimization_table(result['Model'], result['Scaler'], condition, avg_displacement)
