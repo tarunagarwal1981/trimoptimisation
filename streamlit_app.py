@@ -41,14 +41,14 @@ def get_db_engine():
     engine = create_engine(db_url)
     return engine
 
-# Query the database for the vessel's last 1 year of data with wind force <= 4
+# Query the database for the vessel's last 6 months of data with wind force <= 4
 def get_vessel_data(vessel_name, engine):
     vessel_name = vessel_name.strip().upper().replace("'", "''")  # Handling special characters and uppercasing
 
     query = f"""
     SELECT * FROM sf_consumption_logs 
     WHERE "VESSEL_NAME" = upper('{vessel_name}') 
-    AND "REPORT_DATE" >= '{datetime.now() - timedelta(days=365)}'
+    AND "REPORT_DATE" >= '{datetime.now() - timedelta(days=180)}'
     AND "WINDFORCE" <= 4
     """
     
@@ -66,11 +66,11 @@ def train_model(X_train, y_train):
     return model
 
 # Function to optimize trim by finding the best forward and aft drafts
-def optimize_trim(model, speed, displacement, wind_force):
+def optimize_trim(model, speed, displacement):
     def objective(drafts):
         forward_draft, aft_draft = drafts
         trim = aft_draft - forward_draft
-        input_data = np.array([[speed, wind_force, trim, displacement]])
+        input_data = np.array([[speed, trim, displacement]])
         predicted_fuel_consumption = model.predict(input_data)
         return predicted_fuel_consumption[0]  # Minimize this value
 
@@ -106,7 +106,7 @@ if st.session_state.vessel_data is not None:
     # Preprocess the data, calculating trim as DRAFTAFT - DRAFTFWD
     vessel_data = st.session_state.vessel_data
     vessel_data['trim'] = vessel_data[COLUMN_NAMES['DRAFTAFT']] - vessel_data[COLUMN_NAMES['DRAFTFWD']]
-    features = [COLUMN_NAMES['SPEED'], COLUMN_NAMES['WINDFORCE'], 'trim', COLUMN_NAMES['DISPLACEMENT']]
+    features = [COLUMN_NAMES['SPEED'], 'trim', COLUMN_NAMES['DISPLACEMENT']]
     target = COLUMN_NAMES['ME_CONSUMPTION']
 
     # Filter the data for the selected vessel
@@ -128,15 +128,20 @@ if st.session_state.vessel_data is not None:
         st.write(f'MAE: {mae:.4f}')
         st.write(f'R² Score: {r2:.4f}')
 
-    # Trim Optimization Based on User Input
-    st.header('Trim Optimization')
-    speed = st.slider('Speed (knots)', min_value=5, max_value=20, value=10)
-    displacement = st.slider('Displacement (tonnes)', min_value=1000, max_value=20000, value=10000)
-    wind_force = st.slider('Wind Force (Beaufort Scale)', min_value=0, max_value=12, value=5)
+    # Trim Optimization for Speeds between 9-14 knots
+    st.header('Trim Optimization Results')
+    results = []
+    for speed in range(9, 15):
+        optimal_drafts, min_fuel_consumption = optimize_trim(st.session_state.model, speed, displacement=10000)  # Example displacement
+        results.append({
+            'Speed (knots)': speed,
+            'Loading Condition': 'Ballast',  # Example loading condition
+            'Optimal Forward Draft (m)': optimal_drafts[0],
+            'Optimal Aft Draft (m)': optimal_drafts[1],
+            'Minimum Fuel Consumption (tons/hr)': min_fuel_consumption
+        })
 
-    # Run optimization to find the best forward and aft drafts
-    if st.button('Optimize Trim'):
-        optimal_drafts, min_fuel_consumption = optimize_trim(st.session_state.model, speed, displacement, wind_force)
-        st.write(f"Optimal Forward Draft: {optimal_drafts[0]:.2f} meters")
-        st.write(f"Optimal Aft Draft: {optimal_drafts[1]:.2f} meters")
-        st.write(f"Minimum Fuel Consumption: {min_fuel_consumption:.2f} tons per hour")
+    # Display the results as a table
+    results_df = pd.DataFrame(results)
+    st.write("Optimization results for speeds between 9 and 14 knots:")
+    st.dataframe(results_df)
