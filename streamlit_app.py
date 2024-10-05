@@ -8,6 +8,8 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 import plotly.graph_objects as go
+from functools import lru_cache
+from joblib import Parallel, delayed
 
 # DB Configuration
 DB_CONFIG = {
@@ -103,18 +105,25 @@ def plot_data(df):
 def train_model(X, y):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
+    # Use a subset of the training data to reduce training time
+    X_train_sample, _, y_train_sample, _ = train_test_split(X_train, y_train, train_size=0.5, random_state=42)
+    
     scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
+    X_train_scaled = scaler.fit_transform(X_train_sample)
     X_test_scaled = scaler.transform(X_test)
     
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train_scaled, y_train)
+    model = RandomForestRegressor(n_estimators=50, random_state=42)  # Reduced number of estimators
+    model.fit(X_train_scaled, y_train_sample)
     
     y_pred = model.predict(X_test_scaled)
     mse = mean_squared_error(y_test, y_pred)
     r2 = r2_score(y_test, y_pred)
     
     return {'MSE': mse, 'R2': r2, 'Model': model, 'Scaler': scaler}
+
+@lru_cache(maxsize=None)
+def optimize_drafts_cached(speed, displacement, model, scaler):
+    return optimize_drafts(model, scaler, speed, displacement)
 
 def optimize_drafts(model, scaler, speed, displacement):
     best_consumption = float('inf')
@@ -173,16 +182,21 @@ if vessel_name:
                 
                 optimized_drafts = []
                 with st.spinner(f"Optimizing drafts for {condition} condition..."):
-                    for speed in range(9, 15):
-                        best_drafts, best_consumption = optimize_drafts(result['Model'], result['Scaler'], 
-                                                                        speed, avg_displacement)
-                        optimized_drafts.append({
-                            'Speed': speed,
-                            'FWD Draft': round(best_drafts[0], 2),
-                            'AFT Draft': round(best_drafts[1], 2),
-                            'Estimated Consumption': round(best_consumption, 2)
-                        })
+                    optimized_drafts = Parallel(n_jobs=-1)(
+                        delayed(optimize_drafts_cached)(speed, avg_displacement, result['Model'], result['Scaler'])
+                        for speed in range(9, 15)
+                    )
                 
-                st.table(pd.DataFrame(optimized_drafts))
+                final_drafts = [
+                    {
+                        'Speed': speed,
+                        'FWD Draft': round(best_drafts[0], 2),
+                        'AFT Draft': round(best_drafts[1], 2),
+                        'Estimated Consumption': round(best_consumption, 2)
+                    }
+                    for speed, (best_drafts, best_consumption) in zip(range(9, 15), optimized_drafts)
+                ]
+                
+                st.table(pd.DataFrame(final_drafts))
             else:
                 st.warning(f"No data available for {condition.lower()} condition.")
