@@ -10,6 +10,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.neural_network import MLPRegressor
 from sklearn.tree import DecisionTreeRegressor
 from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.pipeline import Pipeline
 import plotly.graph_objects as go
 from functools import lru_cache
 import warnings
