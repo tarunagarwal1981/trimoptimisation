@@ -121,11 +121,19 @@ if vessel_name:
     if df.empty:
         st.warning("No data retrieved. Please check the vessel name and try again.")
     else:
+        # Display the dataframe as a table
+        st.subheader("Retrieved Data")
+        st.dataframe(df[list(COLUMN_NAMES.values())], use_container_width=True)
+        
         df = preprocess_data(df)
         
         if df.empty:
             st.warning("After preprocessing, no valid data remains. Please check the data quality.")
         else:
+            # Display the preprocessed dataframe
+            st.subheader("Preprocessed Data")
+            st.dataframe(df[list(COLUMN_NAMES.values())], use_container_width=True)
+            
             # Separate ballast and laden conditions
             df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
             df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
