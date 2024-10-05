@@ -9,20 +9,95 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 import plotly.graph_objects as go
 
-# DB Configuration and COLUMN_NAMES remain the same
+# DB Configuration
+DB_CONFIG = {
+    'host': 'aws-0-ap-south-1.pooler.supabase.com',
+    'database': 'postgres',
+    'user': 'postgres.conrxbcvuogbzfysomov',
+    'password': 'wXAryCC8@iwNvj#',
+    'port': '6543'
+}
+
+COLUMN_NAMES = {
+    'VESSEL_NAME': 'VESSEL_NAME',
+    'REPORT_DATE': 'REPORT_DATE',
+    'ME_CONSUMPTION': 'ME_CONSUMPTION',
+    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
+    'SPEED': 'SPEED',
+    'DISPLACEMENT': 'DISPLACEMENT',
+    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
+    'WINDFORCE': 'WINDFORCE',
+    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
+    'LOAD_TYPE': 'LOAD_TYPE',
+    'DRAFTFWD': 'DRAFTFWD',
+    'DRAFTAFT': 'DRAFTAFT'
+}
 
 @st.cache_data
 def fetch_data(vessel_name):
-    # fetch_data function remains the same
+    try:
+        conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
+        query = f"""
+        SELECT * FROM sf_consumption_logs
+        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
+        AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
+        AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
+        """
+        df = pd.read_sql_query(query, conn, params=(vessel_name,))
+        conn.close()
+        return df
+    except OperationalError as e:
+        st.error(f"Database connection error: {e}")
+        return pd.DataFrame()
+    except PSQLError as e:
+        st.error(f"Database query error: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        return pd.DataFrame()
 
 @st.cache_data
 def preprocess_data(df):
-    # preprocess_data function remains the same
+    df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
+    for col in ['ME_CONSUMPTION', 'SPEED', 'DRAFTFWD', 'DRAFTAFT', 'DISPLACEMENT', 'STEAMING_TIME_HRS', 'WINDFORCE']:
+        df[COLUMN_NAMES[col]] = pd.to_numeric(df[COLUMN_NAMES[col]], errors='coerce')
+    
+    df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']] > 0) &
+            (df[COLUMN_NAMES['SPEED']] > 0) &
+            (df[COLUMN_NAMES['DRAFTFWD']] > 0) &
+            (df[COLUMN_NAMES['DRAFTAFT']] > 0)]
+    
+    df['TRIM'] = df[COLUMN_NAMES['DRAFTAFT']] - df[COLUMN_NAMES['DRAFTFWD']]
+    df['MEAN_DRAFT'] = (df[COLUMN_NAMES['DRAFTAFT']] + df[COLUMN_NAMES['DRAFTFWD']]) / 2
+    
+    return df
 
 def plot_data(df):
-    # plot_data function remains the same
+    st.subheader("Data Visualization")
+    
+    fig_3d = go.Figure(data=[go.Scatter3d(
+        x=df[COLUMN_NAMES['SPEED']],
+        y=df['MEAN_DRAFT'],
+        z=df[COLUMN_NAMES['ME_CONSUMPTION']],
+        mode='markers',
+        marker=dict(
+            size=5,
+            color=df[COLUMN_NAMES['DISPLACEMENT']],
+            colorscale='Viridis',
+            opacity=0.8
+        )
+    )])
+    
+    fig_3d.update_layout(scene=dict(
+        xaxis_title='Speed',
+        yaxis_title='Mean Draft',
+        zaxis_title='ME Consumption'),
+        width=800, height=800,
+        title="3D Plot: Speed, Mean Draft, ME Consumption (Color: Displacement)"
+    )
+    
+    st.plotly_chart(fig_3d)
 
-@st.cache_resource
 def train_model(X, y):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
@@ -57,6 +132,7 @@ def optimize_drafts(model, scaler, speed, displacement):
     
     return best_drafts, best_consumption
 
+# Main Streamlit app
 st.title("Vessel Draft Optimization")
 
 vessel_name = st.text_input("Enter Vessel Name:")
