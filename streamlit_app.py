@@ -12,11 +12,52 @@ from sklearn.metrics import mean_squared_error, r2_score
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
-# DB Configuration and COLUMN_NAMES remain the same
+# DB Configuration
+DB_CONFIG = {
+    'host': 'aws-0-ap-south-1.pooler.supabase.com',
+    'database': 'postgres',
+    'user': 'postgres.conrxbcvuogbzfysomov',
+    'password': 'wXAryCC8@iwNvj#',
+    'port': '6543'
+}
+
+COLUMN_NAMES = {
+    'VESSEL_NAME': 'VESSEL_NAME',
+    'REPORT_DATE': 'REPORT_DATE',
+    'ME_CONSUMPTION': 'ME_CONSUMPTION',
+    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
+    'SPEED': 'SPEED',
+    'DISPLACEMENT': 'DISPLACEMENT',
+    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
+    'WINDFORCE': 'WINDFORCE',
+    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
+    'LOAD_TYPE': 'LOAD_TYPE',
+    'DRAFTFWD': 'DRAFTFWD',
+    'DRAFTAFT': 'DRAFTAFT'
+}
 
 @st.cache_data
 def fetch_data(vessel_name):
-    # The fetch_data function remains the same
+    try:
+        conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
+        query = f"""
+        SELECT * FROM sf_consumption_logs
+        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
+        AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
+        AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
+        """
+        df = pd.read_sql_query(query, conn, params=(vessel_name,))
+        conn.close()
+        return df
+    except OperationalError as e:
+        st.error(f"Database connection error: {e}")
+        return pd.DataFrame()
+    except PSQLError as e:
+        st.error(f"Database query error: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        return pd.DataFrame()
 
 @st.cache_data
 def preprocess_data(df):
