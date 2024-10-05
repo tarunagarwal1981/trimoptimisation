@@ -30,18 +30,18 @@ except Exception as e:
     st.error(f"Error creating connection pool: {e}")
 
 COLUMN_NAMES = {
-    'VESSEL_NAME': 'VESSEL_NAME',
-    'REPORT_DATE': 'REPORT_DATE',
-    'ME_CONSUMPTION': 'ME_CONSUMPTION',
-    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
-    'SPEED': 'SPEED',
-    'DISPLACEMENT': 'DISPLACEMENT',
-    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
-    'WINDFORCE': 'WINDFORCE',
-    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
-    'LOAD_TYPE': 'LOAD_TYPE',
-    'DRAFTFWD': 'DRAFTFWD',
-    'DRAFTAFT': 'DRAFTAFT'
+    'vessel_name': 'vessel_name',
+    'report_date': 'report_date',
+    'me_consumption': 'me_consumption',
+    'observerd_distance': 'observerd_distance',
+    'speed': 'speed',
+    'displacement': 'displacement',
+    'steaming_time_hrs': 'steaming_time_hrs',
+    'windforce': 'windforce',
+    'vessel_activity': 'vessel_activity',
+    'load_type': 'load_type',
+    'draftfwd': 'draftfwd',
+    'draftaft': 'draftaft'
 }
 
 @st.cache_data
@@ -49,10 +49,10 @@ def fetch_data(vessel_name):
     try:
         conn = connection_pool.getconn()
         query = f"""
-        SELECT {', '.join(COLUMN_NAMES.values())} FROM sf_consumption_logs
-        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
-        AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
-        AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
+        SELECT {', '.join(f'"{col}"' for col in COLUMN_NAMES.values())} FROM sf_consumption_logs
+        WHERE "vessel_name" = %s
+        AND "windforce"::float <= 4
+        AND "steaming_time_hrs"::float >= 16
         LIMIT 10000
         """
         df = pd.read_sql_query(query, conn, params=(vessel_name,))
@@ -63,9 +63,9 @@ def fetch_data(vessel_name):
         return pd.DataFrame()
 
 def preprocess_data(df):
-    df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
+    df[COLUMN_NAMES['report_date']] = pd.to_datetime(df[COLUMN_NAMES['report_date']])
     df = df.apply(pd.to_numeric, errors='coerce')
-    df = df.dropna(subset=[COLUMN_NAMES['ME_CONSUMPTION'], COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']])
+    df = df.dropna(subset=[COLUMN_NAMES['me_consumption'], COLUMN_NAMES['speed'], COLUMN_NAMES['draftfwd'], COLUMN_NAMES['draftaft']])
     return df
 
 def train_and_evaluate_models(X, y):
@@ -125,13 +125,13 @@ if vessel_name:
         df = preprocess_data(df)
         
         # Separate ballast and laden conditions
-        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'BALLAST']
-        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'LADEN']
+        df_ballast = df[df[COLUMN_NAMES['load_type']] == 'ballast']
+        df_laden = df[df[COLUMN_NAMES['load_type']] == 'laden']
         
         # Train models for ballast condition
         if not df_ballast.empty:
-            X_ballast = df_ballast[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
-            y_ballast = df_ballast[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
+            X_ballast = df_ballast[[COLUMN_NAMES['speed'], COLUMN_NAMES['draftfwd'], COLUMN_NAMES['draftaft']]].astype(float)
+            y_ballast = df_ballast[COLUMN_NAMES['me_consumption']].astype(float)
             ballast_results = train_and_evaluate_models(X_ballast, y_ballast)
             
             st.subheader("Ballast Condition Results:")
@@ -148,8 +148,8 @@ if vessel_name:
         
         # Train models for laden condition
         if not df_laden.empty:
-            X_laden = df_laden[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
-            y_laden = df_laden[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
+            X_laden = df_laden[[COLUMN_NAMES['speed'], COLUMN_NAMES['draftfwd'], COLUMN_NAMES['draftaft']]].astype(float)
+            y_laden = df_laden[COLUMN_NAMES['me_consumption']].astype(float)
             laden_results = train_and_evaluate_models(X_laden, y_laden)
             
             st.subheader("Laden Condition Results:")
