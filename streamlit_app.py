@@ -9,11 +9,52 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 import plotly.graph_objects as go
 
-# DB Configuration and COLUMN_NAMES remain the same
+# DB Configuration
+DB_CONFIG = {
+    'host': 'aws-0-ap-south-1.pooler.supabase.com',
+    'database': 'postgres',
+    'user': 'postgres.conrxbcvuogbzfysomov',
+    'password': 'wXAryCC8@iwNvj#',
+    'port': '6543'
+}
+
+COLUMN_NAMES = {
+    'VESSEL_NAME': 'VESSEL_NAME',
+    'REPORT_DATE': 'REPORT_DATE',
+    'ME_CONSUMPTION': 'ME_CONSUMPTION',
+    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
+    'SPEED': 'SPEED',
+    'DISPLACEMENT': 'DISPLACEMENT',
+    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
+    'WINDFORCE': 'WINDFORCE',
+    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
+    'LOAD_TYPE': 'LOAD_TYPE',
+    'DRAFTFWD': 'DRAFTFWD',
+    'DRAFTAFT': 'DRAFTAFT'
+}
 
 @st.cache_data
 def fetch_data(vessel_name):
-    # The fetch_data function remains the same
+    try:
+        conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
+        query = f"""
+        SELECT * FROM sf_consumption_logs
+        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
+        AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
+        AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
+        """
+        df = pd.read_sql_query(query, conn, params=(vessel_name,))
+        conn.close()
+        return df
+    except OperationalError as e:
+        st.error(f"Database connection error: {e}")
+        return pd.DataFrame()
+    except PSQLError as e:
+        st.error(f"Database query error: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        return pd.DataFrame()
 
 @st.cache_data
 def preprocess_data(df):
@@ -28,7 +69,6 @@ def preprocess_data(df):
     
     df['TRIM'] = df[COLUMN_NAMES['DRAFTAFT']] - df[COLUMN_NAMES['DRAFTFWD']]
     df['MEAN_DRAFT'] = (df[COLUMN_NAMES['DRAFTAFT']] + df[COLUMN_NAMES['DRAFTFWD']]) / 2
-    df['DRAFT_RATIO'] = df[COLUMN_NAMES['DRAFTFWD']] / df[COLUMN_NAMES['DRAFTAFT']]
     
     return df
 
@@ -80,15 +120,12 @@ def optimize_drafts(model, scaler, speed, displacement):
     best_consumption = float('inf')
     best_drafts = None
     
-    mean_drafts = np.arange(5, 15, 0.1)
-    trims = np.arange(-2, 2, 0.1)
-    
-    for mean_draft in mean_drafts:
-        for trim in trims:
+    for mean_draft in np.arange(5, 15, 0.1):
+        for trim in np.arange(-2, 2, 0.1):
             fwd = mean_draft - trim/2
             aft = mean_draft + trim/2
             if 4 <= fwd <= 15 and 4 <= aft <= 15:
-                X = scaler.transform([[speed, fwd, aft, displacement, trim, mean_draft, fwd/aft]])
+                X = scaler.transform([[speed, fwd, aft, displacement, trim, mean_draft]])
                 consumption = model.predict(X)[0]
                 
                 if consumption < best_consumption:
@@ -111,7 +148,7 @@ if vessel_name:
         df = preprocess_data(df)
         
         st.subheader("Data Overview")
-        st.dataframe(df[list(COLUMN_NAMES.values()) + ['TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']])
+        st.dataframe(df[list(COLUMN_NAMES.values()) + ['TRIM', 'MEAN_DRAFT']])
         
         plot_data(df)
         
@@ -123,7 +160,7 @@ if vessel_name:
             if not data.empty:
                 st.subheader(f"{condition} Condition Analysis")
                 X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT'], 
-                          COLUMN_NAMES['DISPLACEMENT'], 'TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']]
+                          COLUMN_NAMES['DISPLACEMENT'], 'TRIM', 'MEAN_DRAFT']]
                 y = data[COLUMN_NAMES['ME_CONSUMPTION']]
                 
                 with st.spinner(f"Training model for {condition} condition..."):
