@@ -70,7 +70,7 @@ def optimize_trim(model, speed, displacement):
     def objective(drafts):
         forward_draft, aft_draft = drafts
         trim = aft_draft - forward_draft
-        input_data = pd.DataFrame([[speed, trim, displacement]], columns=['SPEED', 'trim', 'DISPLACEMENT'])
+        input_data = pd.DataFrame([[speed, trim, displacement, forward_draft, aft_draft]], columns=['SPEED', 'trim', 'DISPLACEMENT', 'DRAFTFWD', 'DRAFTAFT'])
         predicted_fuel_consumption = model.predict(input_data)
         return predicted_fuel_consumption[0]  # Minimize this value
 
