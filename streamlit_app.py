@@ -7,11 +7,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
-from xgboost import XGBRegressor
-from lightgbm import LGBMRegressor
-from sklearn.neural_network import MLPRegressor
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense
+from tensorflow.keras.optimizers import Adam
 from scipy.optimize import minimize
 
 # DB Configuration
@@ -118,30 +120,38 @@ def plot_data(df):
     st.plotly_chart(fig_3d)
 
 @st.cache_resource
-def train_models(X, y):
+def train_model(X, y, model_name):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    models = {
-        'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
-        'XGBoost': XGBRegressor(random_state=42),
-        'LightGBM': LGBMRegressor(random_state=42),
-        'Neural Network': MLPRegressor(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42)
-    }
+    if model_name == 'Random Forest':
+        model = RandomForestRegressor(n_estimators=100, random_state=42)
+    elif model_name == 'XGBoost':
+        model = XGBRegressor(random_state=42)
+    elif model_name == 'LightGBM':
+        model = LGBMRegressor(random_state=42)
+    elif model_name == 'Neural Network':
+        model = Sequential([
+            Dense(64, activation='relu', input_shape=(X_train_scaled.shape[1],)),
+            Dense(32, activation='relu'),
+            Dense(1)
+        ])
+        model.compile(optimizer=Adam(), loss='mse')
+        model.fit(X_train_scaled, y_train, epochs=100, batch_size=32, verbose=0)
+    else:
+        raise ValueError("Invalid model name")
     
-    results = {}
-    
-    for name, model in models.items():
+    if model_name != 'Neural Network':
         model.fit(X_train_scaled, y_train)
-        y_pred = model.predict(X_test_scaled)
-        mse = mean_squared_error(y_test, y_pred)
-        r2 = r2_score(y_test, y_pred)
-        results[name] = {'MSE': mse, 'R2': r2, 'Model': model, 'Scaler': scaler}
     
-    return results
+    y_pred = model.predict(X_test_scaled)
+    mse = mean_squared_error(y_test, y_pred)
+    r2 = r2_score(y_test, y_pred)
+    
+    return {'MSE': mse, 'R2': r2, 'Model': model, 'Scaler': scaler}
 
 def optimize_drafts(model, scaler, speed, displacement):
     def objective(x):
@@ -151,33 +161,35 @@ def optimize_drafts(model, scaler, speed, displacement):
         X = scaler.transform([[speed, fwd, aft, displacement, trim, mean_draft, fwd/aft]])
         return model.predict(X)[0]
     
-    bounds = [(4, 15), (4, 15)]
-    result = minimize(objective, [9, 9], method='L-BFGS-B', bounds=bounds)
+    bounds = ((4, 15), (4, 15))
+    result = minimize(objective, [10, 10], method='L-BFGS-B', bounds=bounds)
     
     return result.x, result.fun
 
-def generate_optimization_table(model, scaler, displacement, condition):
+def generate_optimization_table(model, scaler, condition, displacement):
     speeds = range(9, 15)
     data = []
     
     for speed in speeds:
         best_drafts, best_consumption = optimize_drafts(model, scaler, speed, displacement)
-        data.append({
-            'Speed': speed,
-            'Draft FWD': best_drafts[0],
-            'Draft AFT': best_drafts[1],
-            'Estimated Consumption': best_consumption
-        })
+        data.append([speed, best_drafts[0], best_drafts[1], best_consumption])
     
-    df = pd.DataFrame(data)
+    df = pd.DataFrame(data, columns=['Speed', 'Draft FWD', 'Draft AFT', 'Estimated Consumption'])
     st.subheader(f"Optimized Drafts for {condition} Condition:")
     st.table(df.style.format({
+        'Speed': '{:.0f}',
         'Draft FWD': '{:.2f}',
         'Draft AFT': '{:.2f}',
         'Estimated Consumption': '{:.2f}'
     }))
 
 st.title("Vessel Draft Optimization")
+
+# Sidebar for model selection
+model_name = st.sidebar.selectbox(
+    "Select Model",
+    ("Random Forest", "XGBoost", "LightGBM", "Neural Network")
+)
 
 vessel_name = st.text_input("Enter Vessel Name:")
 
@@ -206,15 +218,12 @@ if vessel_name:
                           COLUMN_NAMES['DISPLACEMENT'], 'TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']]
                 y = data[COLUMN_NAMES['ME_CONSUMPTION']]
                 
-                with st.spinner(f"Training models for {condition} condition..."):
-                    results = train_models(X, y)
+                with st.spinner(f"Training {model_name} model for {condition} condition..."):
+                    result = train_model(X, y, model_name)
                 
-                for name, result in results.items():
-                    st.write(f"{name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
-                
-                selected_model = st.selectbox(f"Select model for {condition} condition optimization:", list(results.keys()))
+                st.write(f"{model_name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
                 
                 avg_displacement = data[COLUMN_NAMES['DISPLACEMENT']].mean()
-                generate_optimization_table(results[selected_model]['Model'], results[selected_model]['Scaler'], avg_displacement, condition)
+                generate_optimization_table(result['Model'], result['Scaler'], condition, avg_displacement)
             else:
                 st.warning(f"No data available for {condition.lower()} condition.")
