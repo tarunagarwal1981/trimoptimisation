@@ -11,9 +11,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from xgboost import XGBRegressor
 from lightgbm import LGBMRegressor
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
-from tensorflow.keras.optimizers import Adam
 from scipy.optimize import minimize
 
 # DB Configuration
@@ -133,19 +130,10 @@ def train_model(X, y, model_name):
         model = XGBRegressor(random_state=42)
     elif model_name == 'LightGBM':
         model = LGBMRegressor(random_state=42)
-    elif model_name == 'Neural Network':
-        model = Sequential([
-            Dense(64, activation='relu', input_shape=(X_train_scaled.shape[1],)),
-            Dense(32, activation='relu'),
-            Dense(1)
-        ])
-        model.compile(optimizer=Adam(), loss='mse')
-        model.fit(X_train_scaled, y_train, epochs=100, batch_size=32, verbose=0)
     else:
         raise ValueError("Invalid model name")
     
-    if model_name != 'Neural Network':
-        model.fit(X_train_scaled, y_train)
+    model.fit(X_train_scaled, y_train)
     
     y_pred = model.predict(X_test_scaled)
     mse = mean_squared_error(y_test, y_pred)
@@ -188,7 +176,7 @@ st.title("Vessel Draft Optimization")
 # Sidebar for model selection
 model_name = st.sidebar.selectbox(
     "Select Model",
-    ("Random Forest", "XGBoost", "LightGBM", "Neural Network")
+    ("Random Forest", "XGBoost", "LightGBM")
 )
 
 vessel_name = st.text_input("Enter Vessel Name:")
