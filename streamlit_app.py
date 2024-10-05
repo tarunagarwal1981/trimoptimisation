@@ -5,10 +5,10 @@ import psycopg2
 from psycopg2 import OperationalError, Error as PSQLError
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.linear_model import LinearRegression
-from sklearn.svm import SVR
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.metrics import mean_squared_error, r2_score
+from xgboost import XGBRegressor
+from lightgbm import LGBMRegressor
 
 # DB Configuration
 DB_CONFIG = {
@@ -74,8 +74,9 @@ def train_and_evaluate_models(X, y):
     
     models = {
         'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
-        'Linear Regression': LinearRegression(),
-        'SVR': SVR(kernel='rbf')
+        'Gradient Boosting': GradientBoostingRegressor(n_estimators=100, random_state=42),
+        'XGBoost': XGBRegressor(n_estimators=100, random_state=42),
+        'LightGBM': LGBMRegressor(n_estimators=100, random_state=42)
     }
     
     results = {}
