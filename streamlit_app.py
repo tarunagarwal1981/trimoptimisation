@@ -101,7 +101,7 @@ if st.button('Fetch Vessel Data'):
 
 if st.session_state.vessel_data is not None:
     st.write(f"Data fetched for vessel: {vessel_name}")
-    st.dataframe(st.session_state.vessel_data)
+    st.dataframe(st.session_state.vessel_data[list(COLUMN_NAMES.values())])
 
     # Preprocess the data, calculating trim as DRAFTAFT - DRAFTFWD
     vessel_data = st.session_state.vessel_data.dropna(subset=[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTAFT'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DISPLACEMENT'], COLUMN_NAMES['ME_CONSUMPTION']])
