@@ -1,3 +1,4 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
 import psycopg2
@@ -17,7 +18,6 @@ DB_CONFIG = {
     'port': '6543'
 }
 
-# Column names mapping
 COLUMN_NAMES = {
     'VESSEL_NAME': 'VESSEL_NAME',
     'REPORT_DATE': 'REPORT_DATE',
@@ -33,34 +33,25 @@ COLUMN_NAMES = {
     'DRAFTAFT': 'DRAFTAFT'
 }
 
-def fetch_data_from_db(vessel_name):
+def fetch_data(vessel_name):
     conn = psycopg2.connect(**DB_CONFIG)
     query = f"""
-    SELECT *
-    FROM sf_consumption_logs
+    SELECT * FROM sf_consumption_logs
     WHERE {COLUMN_NAMES['VESSEL_NAME']} = %s
-      AND {COLUMN_NAMES['WINDFORCE']} <= 4
-      AND {COLUMN_NAMES['STEAMING_TIME_HRS']} >= 16
+    AND {COLUMN_NAMES['WINDFORCE']} <= 4
+    AND {COLUMN_NAMES['STEAMING_TIME_HRS']} >= 16
     """
     df = pd.read_sql_query(query, conn, params=(vessel_name,))
     conn.close()
     return df
 
 def preprocess_data(df):
-    # Convert REPORT_DATE to datetime
     df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
-
-    # Filter out rows with missing or zero values in key columns
     df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']] > 0) & 
             (df[COLUMN_NAMES['SPEED']] > 0) & 
             (df[COLUMN_NAMES['DRAFTFWD']] > 0) & 
             (df[COLUMN_NAMES['DRAFTAFT']] > 0)]
-
-    # Separate ballast and laden conditions
-    df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
-    df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
-
-    return df_ballast, df_laden
+    return df
 
 def train_and_evaluate_models(X, y):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -101,47 +92,59 @@ def optimize_drafts(model, scaler, speed):
     
     return best_drafts, best_consumption
 
-def main(vessel_name):
-    # Fetch and preprocess data
-    df = fetch_data_from_db(vessel_name)
-    df_ballast, df_laden = preprocess_data(df)
+def main():
+    st.title("Vessel Draft Optimization")
+    
+    vessel_name = st.text_input("Enter Vessel Name:")
+    
+    if vessel_name:
+        df = fetch_data(vessel_name)
+        
+        if df.empty:
+            st.warning("No data found for the specified vessel.")
+            return
+        
+        df = preprocess_data(df)
+        
+        # Separate ballast and laden conditions
+        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
+        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
+        
+        # Train models for ballast condition
+        X_ballast = df_ballast[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]]
+        y_ballast = df_ballast[COLUMN_NAMES['ME_CONSUMPTION']]
+        ballast_results = train_and_evaluate_models(X_ballast, y_ballast)
+        
+        # Train models for laden condition
+        X_laden = df_laden[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]]
+        y_laden = df_laden[COLUMN_NAMES['ME_CONSUMPTION']]
+        laden_results = train_and_evaluate_models(X_laden, y_laden)
+        
+        # Display results
+        st.subheader("Model Performance")
+        st.write("Ballast Condition Results:")
+        for name, result in ballast_results.items():
+            st.write(f"{name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
+        
+        st.write("\nLaden Condition Results:")
+        for name, result in laden_results.items():
+            st.write(f"{name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
+        
+        # Optimize drafts for different speeds
+        speeds_to_test = [10, 11, 12]
+        
+        st.subheader("Optimized Drafts")
+        st.write("Ballast Condition:")
+        best_model_ballast = min(ballast_results.items(), key=lambda x: x[1]['MSE'])[1]
+        for speed in speeds_to_test:
+            best_drafts, best_consumption = optimize_drafts(best_model_ballast['Model'], best_model_ballast['Scaler'], speed)
+            st.write(f"Speed: {speed} knots, Best Drafts: FWD = {best_drafts[0]:.2f}, AFT = {best_drafts[1]:.2f}, Estimated Consumption: {best_consumption:.2f}")
+        
+        st.write("\nLaden Condition:")
+        best_model_laden = min(laden_results.items(), key=lambda x: x[1]['MSE'])[1]
+        for speed in speeds_to_test:
+            best_drafts, best_consumption = optimize_drafts(best_model_laden['Model'], best_model_laden['Scaler'], speed)
+            st.write(f"Speed: {speed} knots, Best Drafts: FWD = {best_drafts[0]:.2f}, AFT = {best_drafts[1]:.2f}, Estimated Consumption: {best_consumption:.2f}")
 
-    # Train models for ballast condition
-    X_ballast = df_ballast[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]]
-    y_ballast = df_ballast[COLUMN_NAMES['ME_CONSUMPTION']]
-    ballast_results = train_and_evaluate_models(X_ballast, y_ballast)
-
-    # Train models for laden condition
-    X_laden = df_laden[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]]
-    y_laden = df_laden[COLUMN_NAMES['ME_CONSUMPTION']]
-    laden_results = train_and_evaluate_models(X_laden, y_laden)
-
-    # Print results
-    print(f"Results for vessel: {vessel_name}")
-    print("\nBallast Condition Results:")
-    for name, result in ballast_results.items():
-        print(f"{name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
-
-    print("\nLaden Condition Results:")
-    for name, result in laden_results.items():
-        print(f"{name}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
-
-    # Optimize drafts for different speeds
-    speeds_to_test = [10, 11, 12]
-
-    print("\nOptimized Drafts for Ballast Condition:")
-    best_model_ballast = min(ballast_results.items(), key=lambda x: x[1]['MSE'])[1]
-    for speed in speeds_to_test:
-        best_drafts, best_consumption = optimize_drafts(best_model_ballast['Model'], best_model_ballast['Scaler'], speed)
-        print(f"Speed: {speed} knots, Best Drafts: FWD = {best_drafts[0]:.2f}, AFT = {best_drafts[1]:.2f}, Estimated Consumption: {best_consumption:.2f}")
-
-    print("\nOptimized Drafts for Laden Condition:")
-    best_model_laden = min(laden_results.items(), key=lambda x: x[1]['MSE'])[1]
-    for speed in speeds_to_test:
-        best_drafts, best_consumption = optimize_drafts(best_model_laden['Model'], best_model_laden['Scaler'], speed)
-        print(f"Speed: {speed} knots, Best Drafts: FWD = {best_drafts[0]:.2f}, AFT = {best_drafts[1]:.2f}, Estimated Consumption: {best_consumption:.2f}")
-
-# Example usage
 if __name__ == "__main__":
-    vessel_name = input("Enter the vessel name: ")
-    main(vessel_name)
+    main()
