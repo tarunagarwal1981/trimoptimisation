@@ -14,18 +14,108 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from scipy.optimize import minimize
 
-# DB Configuration and COLUMN_NAMES remain the same
+# DB Configuration
+DB_CONFIG = {
+    'host': 'aws-0-ap-south-1.pooler.supabase.com',
+    'database': 'postgres',
+    'user': 'postgres.conrxbcvuogbzfysomov',
+    'password': 'wXAryCC8@iwNvj#',
+    'port': '6543'
+}
+
+COLUMN_NAMES = {
+    'VESSEL_NAME': 'VESSEL_NAME',
+    'REPORT_DATE': 'REPORT_DATE',
+    'ME_CONSUMPTION': 'ME_CONSUMPTION',
+    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
+    'SPEED': 'SPEED',
+    'DISPLACEMENT': 'DISPLACEMENT',
+    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
+    'WINDFORCE': 'WINDFORCE',
+    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
+    'LOAD_TYPE': 'LOAD_TYPE',
+    'DRAFTFWD': 'DRAFTFWD',
+    'DRAFTAFT': 'DRAFTAFT'
+}
 
 @st.cache_data
 def fetch_data(vessel_name):
-    # The fetch_data function remains the same
+    try:
+        conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
+        query = f"""
+        SELECT * FROM sf_consumption_logs
+        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
+        AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
+        AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
+        """
+        df = pd.read_sql_query(query, conn, params=(vessel_name,))
+        conn.close()
+        return df
+    except OperationalError as e:
+        st.error(f"Database connection error: {e}")
+        return pd.DataFrame()
+    except PSQLError as e:
+        st.error(f"Database query error: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        return pd.DataFrame()
 
 @st.cache_data
 def preprocess_data(df):
-    # The preprocess_data function remains the same
+    df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
+    for col in ['ME_CONSUMPTION', 'SPEED', 'DRAFTFWD', 'DRAFTAFT', 'DISPLACEMENT', 'STEAMING_TIME_HRS', 'WINDFORCE']:
+        df[COLUMN_NAMES[col]] = pd.to_numeric(df[COLUMN_NAMES[col]], errors='coerce')
+    
+    df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']] > 0) &
+            (df[COLUMN_NAMES['SPEED']] > 0) &
+            (df[COLUMN_NAMES['DRAFTFWD']] > 0) &
+            (df[COLUMN_NAMES['DRAFTAFT']] > 0)]
+    
+    df['TRIM'] = df[COLUMN_NAMES['DRAFTAFT']] - df[COLUMN_NAMES['DRAFTFWD']]
+    df['MEAN_DRAFT'] = (df[COLUMN_NAMES['DRAFTAFT']] + df[COLUMN_NAMES['DRAFTFWD']]) / 2
+    df['DRAFT_RATIO'] = df[COLUMN_NAMES['DRAFTFWD']] / df[COLUMN_NAMES['DRAFTAFT']]
+    
+    return df
 
 def plot_data(df):
-    # The plot_data function remains the same
+    st.subheader("Data Visualization")
+    
+    # 2D Scatter Plots
+    fig = make_subplots(rows=2, cols=2, subplot_titles=("Speed vs ME Consumption", "Mean Draft vs ME Consumption",
+                                                        "Trim vs ME Consumption", "Displacement vs ME Consumption"))
+    
+    fig.add_trace(go.Scatter(x=df[COLUMN_NAMES['SPEED']], y=df[COLUMN_NAMES['ME_CONSUMPTION']], mode='markers'), row=1, col=1)
+    fig.add_trace(go.Scatter(x=df['MEAN_DRAFT'], y=df[COLUMN_NAMES['ME_CONSUMPTION']], mode='markers'), row=1, col=2)
+    fig.add_trace(go.Scatter(x=df['TRIM'], y=df[COLUMN_NAMES['ME_CONSUMPTION']], mode='markers'), row=2, col=1)
+    fig.add_trace(go.Scatter(x=df[COLUMN_NAMES['DISPLACEMENT']], y=df[COLUMN_NAMES['ME_CONSUMPTION']], mode='markers'), row=2, col=2)
+    
+    fig.update_layout(height=800, width=800, title_text="2D Scatter Plots")
+    st.plotly_chart(fig)
+    
+    # 3D Scatter Plot
+    fig_3d = go.Figure(data=[go.Scatter3d(
+        x=df[COLUMN_NAMES['SPEED']],
+        y=df['TRIM'],
+        z=df[COLUMN_NAMES['ME_CONSUMPTION']],
+        mode='markers',
+        marker=dict(
+            size=5,
+            color=df[COLUMN_NAMES['DISPLACEMENT']],
+            colorscale='Viridis',
+            opacity=0.8
+        )
+    )])
+    
+    fig_3d.update_layout(scene=dict(
+        xaxis_title='Speed',
+        yaxis_title='Trim',
+        zaxis_title='ME Consumption'),
+        width=800, height=800,
+        title="3D Plot: Speed, Trim, ME Consumption (Color: Displacement)"
+    )
+    
+    st.plotly_chart(fig_3d)
 
 @st.cache_resource
 def train_models(X, y):
