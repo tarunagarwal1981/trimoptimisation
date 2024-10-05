@@ -40,9 +40,9 @@ def fetch_data(vessel_name):
         conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
         query = f"""
         SELECT * FROM sf_consumption_logs
-        WHERE {COLUMN_NAMES['VESSEL_NAME']} = %s
-        AND {COLUMN_NAMES['WINDFORCE']} <= 4
-        AND {COLUMN_NAMES['STEAMING_TIME_HRS']} >= 16
+        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
+        AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
+        AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
         """
         df = pd.read_sql_query(query, conn, params=(vessel_name,))
         conn.close()
@@ -59,10 +59,10 @@ def fetch_data(vessel_name):
 
 def preprocess_data(df):
     df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
-    df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']] > 0) &
-            (df[COLUMN_NAMES['SPEED']] > 0) &
-            (df[COLUMN_NAMES['DRAFTFWD']] > 0) &
-            (df[COLUMN_NAMES['DRAFTAFT']] > 0)]
+    df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']].astype(float) > 0) &
+            (df[COLUMN_NAMES['SPEED']].astype(float) > 0) &
+            (df[COLUMN_NAMES['DRAFTFWD']].astype(float) > 0) &
+            (df[COLUMN_NAMES['DRAFTAFT']].astype(float) > 0)]
     return df
 
 def train_and_evaluate_models(X, y):
@@ -122,8 +122,8 @@ if vessel_name:
         
         # Train models for ballast condition
         if not df_ballast.empty:
-            X_ballast = df_ballast[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]]
-            y_ballast = df_ballast[COLUMN_NAMES['ME_CONSUMPTION']]
+            X_ballast = df_ballast[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
+            y_ballast = df_ballast[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
             ballast_results = train_and_evaluate_models(X_ballast, y_ballast)
             
             st.subheader("Ballast Condition Results:")
@@ -140,8 +140,8 @@ if vessel_name:
         
         # Train models for laden condition
         if not df_laden.empty:
-            X_laden = df_laden[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]]
-            y_laden = df_laden[COLUMN_NAMES['ME_CONSUMPTION']]
+            X_laden = df_laden[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
+            y_laden = df_laden[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
             laden_results = train_and_evaluate_models(X_laden, y_laden)
             
             st.subheader("Laden Condition Results:")
