@@ -2,14 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import psycopg2
-from psycopg2 import pool
+from psycopg2 import OperationalError, Error as PSQLError
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, r2_score
-from scipy.optimize import minimize
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # DB Configuration
 DB_CONFIG = {
@@ -20,56 +18,88 @@ DB_CONFIG = {
     'port': '6543'
 }
 
-# Database connection pooling
-try:
-    connection_pool = psycopg2.pool.SimpleConnectionPool(1, 10, **DB_CONFIG)
-    if connection_pool:
-        st.info("Connection pool created successfully")
-except Exception as e:
-    st.error(f"Error creating connection pool: {e}")
-
 COLUMN_NAMES = {
-    'VESSEL_NAME': 'vessel_name',
-    'REPORT_DATE': 'report_date',
-    'ME_CONSUMPTION': 'me_consumption',
-    'OBSERVERD_DISTANCE': 'observerd_distance',
-    'SPEED': 'speed',
-    'DISPLACEMENT': 'displacement',
-    'STEAMING_TIME_HRS': 'steaming_time_hrs',
-    'WINDFORCE': 'windforce',
-    'VESSEL_ACTIVITY': 'vessel_activity',
-    'LOAD_TYPE': 'load_type',
-    'DRAFTFWD': 'draftfwd',
-    'DRAFTAFT': 'draftaft'
+    'VESSEL_NAME': 'VESSEL_NAME',
+    'REPORT_DATE': 'REPORT_DATE',
+    'ME_CONSUMPTION': 'ME_CONSUMPTION',
+    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
+    'SPEED': 'SPEED',
+    'DISPLACEMENT': 'DISPLACEMENT',
+    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
+    'WINDFORCE': 'WINDFORCE',
+    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
+    'LOAD_TYPE': 'LOAD_TYPE',
+    'DRAFTFWD': 'DRAFTFWD',
+    'DRAFTAFT': 'DRAFTAFT'
 }
 
 @st.cache_data
 def fetch_data(vessel_name):
     try:
-        conn = connection_pool.getconn()
+        conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
         query = f"""
-        SELECT "VESSEL_NAME", "REPORT_DATE", "ME_CONSUMPTION", "OBSERVERD_DISTANCE", "SPEED", "DISPLACEMENT", "STEAMING_TIME_HRS", "WINDFORCE", "VESSEL_ACTIVITY", "LOAD_TYPE", "DRAFTFWD", "DRAFTAFT" FROM sf_consumption_logs
-        WHERE "VESSEL_NAME" = %s
+        SELECT * FROM sf_consumption_logs
+        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
         AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
         AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
-        LIMIT 10000
         """
         df = pd.read_sql_query(query, conn, params=(vessel_name,))
-        connection_pool.putconn(conn)
+        conn.close()
         return df
+    except OperationalError as e:
+        st.error(f"Database connection error: {e}")
+        return pd.DataFrame()
+    except PSQLError as e:
+        st.error(f"Database query error: {e}")
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Error fetching data: {e}")
+        st.error(f"An unexpected error occurred: {e}")
         return pd.DataFrame()
 
+@st.cache_data
 def preprocess_data(df):
-    df = df.dropna(subset=[COLUMN_NAMES['LOAD_TYPE']])
     df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
-    df = df.apply(pd.to_numeric, errors='coerce')
-    df = df.dropna(subset=[COLUMN_NAMES['ME_CONSUMPTION'], COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']])
+    for col in ['ME_CONSUMPTION', 'SPEED', 'DRAFTFWD', 'DRAFTAFT', 'DISPLACEMENT', 'STEAMING_TIME_HRS', 'WINDFORCE']:
+        df[COLUMN_NAMES[col]] = pd.to_numeric(df[COLUMN_NAMES[col]], errors='coerce')
+    
+    df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']] > 0) &
+            (df[COLUMN_NAMES['SPEED']] > 0) &
+            (df[COLUMN_NAMES['DRAFTFWD']] > 0) &
+            (df[COLUMN_NAMES['DRAFTAFT']] > 0)]
+    
+    df['TRIM'] = df[COLUMN_NAMES['DRAFTAFT']] - df[COLUMN_NAMES['DRAFTFWD']]
     df['MEAN_DRAFT'] = (df[COLUMN_NAMES['DRAFTAFT']] + df[COLUMN_NAMES['DRAFTFWD']]) / 2
+    df['DRAFT_RATIO'] = df[COLUMN_NAMES['DRAFTFWD']] / df[COLUMN_NAMES['DRAFTAFT']]
+    
     return df
 
-@st.cache_resource(ttl=3600)
+def plot_data(df):
+    st.subheader("Data Visualization")
+    
+    fig_3d = go.Figure(data=[go.Scatter3d(
+        x=df[COLUMN_NAMES['SPEED']],
+        y=df['MEAN_DRAFT'],
+        z=df[COLUMN_NAMES['ME_CONSUMPTION']],
+        mode='markers',
+        marker=dict(
+            size=5,
+            color=df[COLUMN_NAMES['DISPLACEMENT']],
+            colorscale='Viridis',
+            opacity=0.8
+        )
+    )])
+    
+    fig_3d.update_layout(scene=dict(
+        xaxis_title='Speed',
+        yaxis_title='Mean Draft',
+        zaxis_title='ME Consumption'),
+        width=800, height=800,
+        title="3D Plot: Speed, Mean Draft, ME Consumption (Color: Displacement)"
+    )
+    
+    st.plotly_chart(fig_3d)
+
+@st.cache_resource
 def train_model(X, y):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
@@ -77,24 +107,26 @@ def train_model(X, y):
     X_train_scaled = scaler.fit_transform(X_train)
     X_test_scaled = scaler.transform(X_test)
     
-    model = RandomForestRegressor(n_estimators=50, max_depth=10, random_state=42, n_jobs=-1)
+    model = RandomForestRegressor(n_estimators=100, random_state=42)
     model.fit(X_train_scaled, y_train)
+    
     y_pred = model.predict(X_test_scaled)
     mse = mean_squared_error(y_test, y_pred)
     r2 = r2_score(y_test, y_pred)
     
     return {'MSE': mse, 'R2': r2, 'Model': model, 'Scaler': scaler}
 
+@st.cache_data
 def optimize_drafts(model, scaler, speed, displacement):
     best_consumption = float('inf')
     best_drafts = None
     
-    for mean_draft in np.arange(5, 15, 1.0):  # Increased step size for performance
-        for trim in np.arange(-1, 1, 1.0):
-            fwd = mean_draft - trim / 2
-            aft = mean_draft + trim / 2
+    for mean_draft in np.arange(5, 15, 0.1):
+        for trim in np.arange(-2, 2, 0.1):
+            fwd = mean_draft - trim/2
+            aft = mean_draft + trim/2
             if 4 <= fwd <= 15 and 4 <= aft <= 15:
-                X = scaler.transform([[speed, fwd, aft, displacement, mean_draft]])
+                X = scaler.transform([[speed, fwd, aft, displacement, trim, mean_draft, fwd/aft]])
                 consumption = model.predict(X)[0]
                 
                 if consumption < best_consumption:
@@ -108,7 +140,8 @@ st.title("Vessel Draft Optimization")
 vessel_name = st.text_input("Enter Vessel Name:")
 
 if vessel_name:
-    df = fetch_data(vessel_name)
+    with st.spinner("Fetching and processing data..."):
+        df = fetch_data(vessel_name)
     
     if df.empty:
         st.warning("No data retrieved. Please check the vessel name and try again.")
@@ -116,41 +149,19 @@ if vessel_name:
         df = preprocess_data(df)
         
         st.subheader("Data Overview")
-        st.dataframe(df[list(COLUMN_NAMES.values()) + ['MEAN_DRAFT']])
+        st.dataframe(df[list(COLUMN_NAMES.values()) + ['TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']])
         
-        # 3D Scatter Plot
-        st.subheader("3D Data Visualization")
-        fig_3d = go.Figure(data=[go.Scatter3d(
-            x=df[COLUMN_NAMES['SPEED']],
-            y=df['MEAN_DRAFT'],
-            z=df[COLUMN_NAMES['ME_CONSUMPTION']],
-            mode='markers',
-            marker=dict(
-                size=5,
-                color=df[COLUMN_NAMES['DISPLACEMENT']],
-                colorscale='Viridis',
-                opacity=0.8
-            )
-        )])
-        
-        fig_3d.update_layout(scene=dict(
-            xaxis_title='Speed',
-            yaxis_title='Mean Draft',
-            zaxis_title='ME Consumption'),
-            width=800, height=800,
-            title="3D Plot: Speed, Mean Draft, ME Consumption (Color: Displacement)"
-        )
-        
-        st.plotly_chart(fig_3d)
+        plot_data(df)
         
         # Separate ballast and laden conditions
-        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'ballast']
-        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'laden']
+        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
+        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
         
         for condition, data in [("Ballast", df_ballast), ("Laden", df_laden)]:
             if not data.empty:
                 st.subheader(f"{condition} Condition Analysis")
-                X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT'], COLUMN_NAMES['DISPLACEMENT'], 'MEAN_DRAFT']]
+                X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT'], 
+                          COLUMN_NAMES['DISPLACEMENT'], 'TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']]
                 y = data[COLUMN_NAMES['ME_CONSUMPTION']]
                 
                 with st.spinner(f"Training model for {condition} condition..."):
@@ -160,13 +171,18 @@ if vessel_name:
                 
                 st.subheader(f"Optimized Drafts for {condition} Condition:")
                 avg_displacement = data[COLUMN_NAMES['DISPLACEMENT']].mean()
-                optimization_results = []
-                for speed in range(9, 15):  # Speeds from 9 to 14 knots
-                    best_drafts, best_consumption = optimize_drafts(result['Model'], result['Scaler'], speed, avg_displacement)
-                    optimization_results.append((speed, best_drafts[0], best_drafts[1], best_consumption))
                 
-                # Display the results in a table
-                optimization_df = pd.DataFrame(optimization_results, columns=['Speed (knots)', 'Best FWD Draft (m)', 'Best AFT Draft (m)', 'Estimated Consumption (tons/hr)'])
-                st.table(optimization_df)
+                optimized_drafts = []
+                for speed in range(9, 15):
+                    best_drafts, best_consumption = optimize_drafts(result['Model'], result['Scaler'], 
+                                                                    speed, avg_displacement)
+                    optimized_drafts.append({
+                        'Speed': speed,
+                        'FWD Draft': best_drafts[0],
+                        'AFT Draft': best_drafts[1],
+                        'Estimated Consumption': best_consumption
+                    })
+                
+                st.table(pd.DataFrame(optimized_drafts))
             else:
                 st.warning(f"No data available for {condition.lower()} condition.")
