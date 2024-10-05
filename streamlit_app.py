@@ -24,9 +24,12 @@ COLUMN_NAMES = {
     'VESSEL_NAME': 'VESSEL_NAME',
     'REPORT_DATE': 'REPORT_DATE',
     'ME_CONSUMPTION': 'ME_CONSUMPTION',
+    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
     'SPEED': 'SPEED',
-    'WINDFORCE': 'WINDFORCE',
+    'DISPLACEMENT': 'DISPLACEMENT',
     'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
+    'WINDFORCE': 'WINDFORCE',
+    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
     'LOAD_TYPE': 'LOAD_TYPE',
     'DRAFTFWD': 'DRAFTFWD',
     'DRAFTAFT': 'DRAFTAFT'
@@ -37,7 +40,7 @@ def fetch_data(vessel_name):
     try:
         conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
         query = f"""
-        SELECT {', '.join(COLUMN_NAMES.values())} FROM sf_consumption_logs
+        SELECT * FROM sf_consumption_logs
         WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
         AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
         AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
@@ -45,8 +48,11 @@ def fetch_data(vessel_name):
         df = pd.read_sql_query(query, conn, params=(vessel_name,))
         conn.close()
         return df
-    except (OperationalError, PSQLError) as e:
-        st.error(f"Database error: {e}")
+    except OperationalError as e:
+        st.error(f"Database connection error: {e}")
+        return pd.DataFrame()
+    except PSQLError as e:
+        st.error(f"Database query error: {e}")
         return pd.DataFrame()
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
@@ -97,29 +103,25 @@ def optimize_drafts(model, scaler, speed):
 
 st.title("Vessel Draft Optimization")
 
-@st.cache_data
-def load_and_process_data(vessel_name):
-    df = fetch_data(vessel_name)
-    if not df.empty:
-        df = preprocess_data(df)
-        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
-        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
-        return df_ballast, df_laden
-    return pd.DataFrame(), pd.DataFrame()
-
 vessel_name = st.text_input("Enter Vessel Name:")
 
 if vessel_name:
-    df_ballast, df_laden = load_and_process_data(vessel_name)
+    df = fetch_data(vessel_name)
     
-    if df_ballast.empty and df_laden.empty:
+    if df.empty:
         st.warning("No data retrieved. Please check the vessel name and try again.")
     else:
-        for condition, df in [("Ballast", df_ballast), ("Laden", df_laden)]:
-            if not df.empty:
+        df = preprocess_data(df)
+        
+        # Separate ballast and laden conditions
+        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
+        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
+        
+        for condition, data in [("Ballast", df_ballast), ("Laden", df_laden)]:
+            if not data.empty:
                 st.subheader(f"{condition} Condition Results:")
-                X = df[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
-                y = df[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
+                X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
+                y = data[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
                 results = train_and_evaluate_models(X, y)
                 
                 for name, result in results.items():
