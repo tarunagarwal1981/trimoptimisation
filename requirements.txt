@@ -6,3 +6,4 @@ psycopg2-binary        # For PostgreSQL driver
 scikit-learn    # For machine learning models and metrics
 scipy
 xgboost
+matplotlib
