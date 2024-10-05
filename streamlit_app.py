@@ -116,7 +116,6 @@ def train_model(X, y):
     
     return {'MSE': mse, 'R2': r2, 'Model': model, 'Scaler': scaler}
 
-@st.cache_data
 def optimize_drafts(model, scaler, speed, displacement):
     best_consumption = float('inf')
     best_drafts = None
@@ -173,15 +172,16 @@ if vessel_name:
                 avg_displacement = data[COLUMN_NAMES['DISPLACEMENT']].mean()
                 
                 optimized_drafts = []
-                for speed in range(9, 15):
-                    best_drafts, best_consumption = optimize_drafts(result['Model'], result['Scaler'], 
-                                                                    speed, avg_displacement)
-                    optimized_drafts.append({
-                        'Speed': speed,
-                        'FWD Draft': best_drafts[0],
-                        'AFT Draft': best_drafts[1],
-                        'Estimated Consumption': best_consumption
-                    })
+                with st.spinner(f"Optimizing drafts for {condition} condition..."):
+                    for speed in range(9, 15):
+                        best_drafts, best_consumption = optimize_drafts(result['Model'], result['Scaler'], 
+                                                                        speed, avg_displacement)
+                        optimized_drafts.append({
+                            'Speed': speed,
+                            'FWD Draft': round(best_drafts[0], 2),
+                            'AFT Draft': round(best_drafts[1], 2),
+                            'Estimated Consumption': round(best_consumption, 2)
+                        })
                 
                 st.table(pd.DataFrame(optimized_drafts))
             else:
