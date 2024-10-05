@@ -89,8 +89,11 @@ vessel_name = st.text_input('Enter Vessel Name')
 if 'vessel_data' not in st.session_state:
     st.session_state.vessel_data = None
 
-if 'model' not in st.session_state:
-    st.session_state.model = None
+if 'model_laden' not in st.session_state:
+    st.session_state.model_laden = None
+
+if 'model_ballast' not in st.session_state:
+    st.session_state.model_ballast = None
 
 if st.button('Fetch Vessel Data'):
     if not vessel_name:
@@ -104,48 +107,72 @@ if st.session_state.vessel_data is not None:
     st.dataframe(st.session_state.vessel_data[list(COLUMN_NAMES.values())])
 
     # Preprocess the data, calculating trim as DRAFTAFT - DRAFTFWD
-    vessel_data = st.session_state.vessel_data.dropna(subset=[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTAFT'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DISPLACEMENT'], COLUMN_NAMES['ME_CONSUMPTION']])
+    vessel_data = st.session_state.vessel_data.dropna(subset=[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTAFT'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DISPLACEMENT'], COLUMN_NAMES['ME_CONSUMPTION'], COLUMN_NAMES['STEAMING_TIME_HRS'], COLUMN_NAMES['VESSEL_ACTIVITY']])
     vessel_data['trim'] = vessel_data[COLUMN_NAMES['DRAFTAFT']] - vessel_data[COLUMN_NAMES['DRAFTFWD']]
-    features = [COLUMN_NAMES['SPEED'], 'trim', COLUMN_NAMES['DISPLACEMENT']]
-    target = COLUMN_NAMES['ME_CONSUMPTION']
+    vessel_data['ME_CONSUMPTION_HR'] = vessel_data[COLUMN_NAMES['ME_CONSUMPTION']] / vessel_data[COLUMN_NAMES['STEAMING_TIME_HRS']]
+    
+    # Separate data into laden and ballast conditions
+    laden_data = vessel_data[vessel_data[COLUMN_NAMES['VESSEL_ACTIVITY']].str.lower() == 'loaded passage']
+    ballast_data = vessel_data[vessel_data[COLUMN_NAMES['VESSEL_ACTIVITY']].str.lower() == 'ballast passage']
 
-    # Filter the data for the selected vessel
-    X = vessel_data[features]
-    y = vessel_data[target]
+    # Features and target for training
+    features = [COLUMN_NAMES['SPEED'], 'trim', COLUMN_NAMES['DISPLACEMENT'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]
+    target = 'ME_CONSUMPTION_HR'
 
-    # Check if there are any NaN values or if the dataset is empty
-    if X.isnull().values.any() or y.isnull().values.any() or X.empty or y.empty:
-        st.error("Data contains missing values or is insufficient for training. Please check the data quality.")
+    # Train models for laden and ballast conditions
+    if not laden_data.empty:
+        X_laden = laden_data[features]
+        y_laden = laden_data[target]
+        if not X_laden.isnull().values.any() and not y_laden.isnull().values.any():
+            X_train, X_test, y_train, y_test = train_test_split(X_laden, y_laden, test_size=0.2, random_state=42)
+            st.session_state.model_laden = train_model(X_train, y_train)
+            st.write("Laden model trained successfully.")
     else:
-        # Train the model and store it in session state
-        if st.session_state.model is None:
-            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-            st.session_state.model = train_model(X_train, y_train)
+        st.warning("No data available for laden condition.")
 
-            # Display model performance
-            y_pred = st.session_state.model.predict(X_test)
-            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-            mae = mean_absolute_error(y_test, y_pred)
-            r2 = st.session_state.model.score(X_test, y_test)
+    if not ballast_data.empty:
+        X_ballast = ballast_data[features]
+        y_ballast = ballast_data[target]
+        if not X_ballast.isnull().values.any() and not y_ballast.isnull().values.any():
+            X_train, X_test, y_train, y_test = train_test_split(X_ballast, y_ballast, test_size=0.2, random_state=42)
+            st.session_state.model_ballast = train_model(X_train, y_train)
+            st.write("Ballast model trained successfully.")
+    else:
+        st.warning("No data available for ballast condition.")
 
-            st.write(f'RMSE: {rmse:.4f}')
-            st.write(f'MAE: {mae:.4f}')
-            st.write(f'R² Score: {r2:.4f}')
+    # Trim Optimization for Speeds between 9-14 knots for laden and ballast
+    st.header('Trim Optimization Results')
+    results_laden = []
+    results_ballast = []
 
-        # Trim Optimization for Speeds between 9-14 knots
-        st.header('Trim Optimization Results')
-        results = []
-        for speed in range(9, 15):
-            optimal_drafts, min_fuel_consumption = optimize_trim(st.session_state.model, speed, displacement=10000)  # Example displacement
-            results.append({
+    for speed in range(9, 15):
+        if st.session_state.model_laden is not None:
+            optimal_drafts, min_fuel_consumption = optimize_trim(st.session_state.model_laden, speed, displacement=10000)  # Example displacement
+            results_laden.append({
                 'Speed (knots)': speed,
-                'Loading Condition': 'Ballast',  # Example loading condition
+                'Loading Condition': 'Laden',
                 'Optimal Forward Draft (m)': optimal_drafts[0],
                 'Optimal Aft Draft (m)': optimal_drafts[1],
                 'Minimum Fuel Consumption (tons/hr)': min_fuel_consumption
             })
 
-        # Display the results as a table
-        results_df = pd.DataFrame(results)
-        st.write("Optimization results for speeds between 9 and 14 knots:")
-        st.dataframe(results_df)
+        if st.session_state.model_ballast is not None:
+            optimal_drafts, min_fuel_consumption = optimize_trim(st.session_state.model_ballast, speed, displacement=10000)  # Example displacement
+            results_ballast.append({
+                'Speed (knots)': speed,
+                'Loading Condition': 'Ballast',
+                'Optimal Forward Draft (m)': optimal_drafts[0],
+                'Optimal Aft Draft (m)': optimal_drafts[1],
+                'Minimum Fuel Consumption (tons/hr)': min_fuel_consumption
+            })
+
+    # Display the results as tables
+    if results_laden:
+        st.write("Optimization results for laden condition:")
+        results_laden_df = pd.DataFrame(results_laden)
+        st.dataframe(results_laden_df)
+
+    if results_ballast:
+        st.write("Optimization results for ballast condition:")
+        results_ballast_df = pd.DataFrame(results_ballast)
+        st.dataframe(results_ballast_df)
