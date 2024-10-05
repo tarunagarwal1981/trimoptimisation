@@ -35,17 +35,26 @@ COLUMN_NAMES = {
 
 @st.cache_data
 def fetch_data(vessel_name):
-    conn = psycopg2.connect(**DB_CONFIG)
-    query = f"""
-    SELECT * FROM sf_consumption_logs
-    WHERE {COLUMN_NAMES['VESSEL_NAME']} = %s
-    AND {COLUMN_NAMES['WINDFORCE']} <= 4
-    AND {COLUMN_NAMES['STEAMING_TIME_HRS']} >= 16
-    """
-    df = pd.read_sql_query(query, conn, params=(vessel_name,))
-    conn.close()
-    return df
-
+    try:
+        conn = psycopg2.connect(**DB_CONFIG)
+        query = f"""
+        SELECT * FROM sf_consumption_logs
+        WHERE {COLUMN_NAMES['VESSEL_NAME']} = %s
+        AND {COLUMN_NAMES['WINDFORCE']} <= 4
+        AND {COLUMN_NAMES['STEAMING_TIME_HRS']} >= 16
+        """
+        df = pd.read_sql_query(query, conn, params=(vessel_name,))
+        conn.close()
+        return df
+    except OperationalError as e:
+        st.error(f"Database connection error: {e}")
+        return pd.DataFrame()
+    except PSQLError as e:
+        st.error(f"Database query error: {e}")
+        return pd.DataFrame()
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {e}")
+        return pd.DataFrame()
 def preprocess_data(df):
     df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
     df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']] > 0) &
