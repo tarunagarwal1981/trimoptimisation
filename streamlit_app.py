@@ -33,6 +33,7 @@ COLUMN_NAMES = {
     'DRAFTAFT': 'DRAFTAFT'
 }
 
+@st.cache_data
 def fetch_data(vessel_name):
     conn = psycopg2.connect(**DB_CONFIG)
     query = f"""
@@ -92,18 +93,16 @@ def optimize_drafts(model, scaler, speed):
     
     return best_drafts, best_consumption
 
-def main():
-    st.title("Vessel Draft Optimization")
+st.title("Vessel Draft Optimization")
+
+vessel_name = st.text_input("Enter Vessel Name:")
+
+if vessel_name:
+    df = fetch_data(vessel_name)
     
-    vessel_name = st.text_input("Enter Vessel Name:")
-    
-    if vessel_name:
-        df = fetch_data(vessel_name)
-        
-        if df.empty:
-            st.warning("No data found for the specified vessel.")
-            return
-        
+    if df.empty:
+        st.warning("No data found for the specified vessel.")
+    else:
         df = preprocess_data(df)
         
         # Separate ballast and laden conditions
@@ -145,6 +144,3 @@ def main():
         for speed in speeds_to_test:
             best_drafts, best_consumption = optimize_drafts(best_model_laden['Model'], best_model_laden['Scaler'], speed)
             st.write(f"Speed: {speed} knots, Best Drafts: FWD = {best_drafts[0]:.2f}, AFT = {best_drafts[1]:.2f}, Estimated Consumption: {best_consumption:.2f}")
-
-if __name__ == "__main__":
-    main()
