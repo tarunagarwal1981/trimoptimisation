@@ -30,18 +30,18 @@ except Exception as e:
     st.error(f"Error creating connection pool: {e}")
 
 COLUMN_NAMES = {
-    'VESSEL_NAME': 'VESSEL_NAME',
-    'REPORT_DATE': 'REPORT_DATE',
-    'ME_CONSUMPTION': 'ME_CONSUMPTION',
-    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
-    'SPEED': 'SPEED',
-    'DISPLACEMENT': 'DISPLACEMENT',
-    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
-    'WINDFORCE': 'WINDFORCE',
-    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
-    'LOAD_TYPE': 'LOAD_TYPE',
-    'DRAFTFWD': 'DRAFTFWD',
-    'DRAFTAFT': 'DRAFTAFT'
+    'VESSEL_NAME': 'vessel_name',
+    'REPORT_DATE': 'report_date',
+    'ME_CONSUMPTION': 'me_consumption',
+    'OBSERVERD_DISTANCE': 'observerd_distance',
+    'SPEED': 'speed',
+    'DISPLACEMENT': 'displacement',
+    'STEAMING_TIME_HRS': 'steaming_time_hrs',
+    'WINDFORCE': 'windforce',
+    'VESSEL_ACTIVITY': 'vessel_activity',
+    'LOAD_TYPE': 'load_type',
+    'DRAFTFWD': 'draftfwd',
+    'DRAFTAFT': 'draftaft'
 }
 
 @st.cache_data
@@ -50,9 +50,9 @@ def fetch_data(vessel_name):
         conn = connection_pool.getconn()
         query = f"""
         SELECT {', '.join(COLUMN_NAMES.values())} FROM sf_consumption_logs
-        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
-        AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
-        AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
+        WHERE {COLUMN_NAMES['VESSEL_NAME']} = %s
+        AND {COLUMN_NAMES['WINDFORCE']}::float <= 4
+        AND {COLUMN_NAMES['STEAMING_TIME_HRS']}::float >= 16
         LIMIT 10000
         """
         df = pd.read_sql_query(query, conn, params=(vessel_name,))
