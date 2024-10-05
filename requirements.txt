@@ -8,3 +8,4 @@ scipy
 xgboost
 matplotlib
 plotly
+lightgbm
