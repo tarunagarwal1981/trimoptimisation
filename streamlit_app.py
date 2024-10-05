@@ -50,9 +50,9 @@ def fetch_data(vessel_name):
         conn = connection_pool.getconn()
         query = f"""
         SELECT {', '.join(COLUMN_NAMES.values())} FROM sf_consumption_logs
-        WHERE {COLUMN_NAMES['VESSEL_NAME']} = %s
-        AND {COLUMN_NAMES['WINDFORCE']}::float <= 4
-        AND {COLUMN_NAMES['STEAMING_TIME_HRS']}::float >= 16
+        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
+        AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
+        AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
         LIMIT 10000
         """
         df = pd.read_sql_query(query, conn, params=(vessel_name,))
@@ -125,8 +125,8 @@ if vessel_name:
         df = preprocess_data(df)
         
         # Separate ballast and laden conditions
-        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
-        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
+        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'ballast']
+        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'laden']
         
         # Train models for ballast condition
         if not df_ballast.empty:
