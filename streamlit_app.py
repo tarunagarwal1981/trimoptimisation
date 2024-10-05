@@ -48,8 +48,8 @@ def fetch_data(vessel_name):
     try:
         conn = connection_pool.getconn()
         query = f"""
-        SELECT {', '.join(COLUMN_NAMES.values())} FROM sf_consumption_logs
-        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
+        SELECT "vessel_name", "report_date", "me_consumption", "observerd_distance", "speed", "displacement", "steaming_time_hrs", "windforce", "vessel_activity", "load_type", "draftfwd", "draftaft" FROM sf_consumption_logs
+        WHERE "vessel_name" = %s
         AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
         AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
         LIMIT 10000
