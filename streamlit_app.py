@@ -107,13 +107,13 @@ if st.session_state.vessel_data is not None:
     st.dataframe(st.session_state.vessel_data[list(COLUMN_NAMES.values())])
 
     # Preprocess the data, calculating trim as DRAFTAFT - DRAFTFWD
-    vessel_data = st.session_state.vessel_data.dropna(subset=[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTAFT'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DISPLACEMENT'], COLUMN_NAMES['ME_CONSUMPTION'], COLUMN_NAMES['STEAMING_TIME_HRS'], COLUMN_NAMES['VESSEL_ACTIVITY']])
+    vessel_data = st.session_state.vessel_data.dropna(subset=[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTAFT'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DISPLACEMENT'], COLUMN_NAMES['ME_CONSUMPTION'], COLUMN_NAMES['STEAMING_TIME_HRS'], COLUMN_NAMES['LOAD_TYPE']])
     vessel_data['trim'] = vessel_data[COLUMN_NAMES['DRAFTAFT']] - vessel_data[COLUMN_NAMES['DRAFTFWD']]
     vessel_data['ME_CONSUMPTION_HR'] = vessel_data[COLUMN_NAMES['ME_CONSUMPTION']] / vessel_data[COLUMN_NAMES['STEAMING_TIME_HRS']]
     
     # Separate data into laden and ballast conditions
-    laden_data = vessel_data[vessel_data[COLUMN_NAMES['VESSEL_ACTIVITY']].str.lower() == 'loaded passage']
-    ballast_data = vessel_data[vessel_data[COLUMN_NAMES['VESSEL_ACTIVITY']].str.lower() == 'ballast passage']
+    laden_data = vessel_data[vessel_data[COLUMN_NAMES['LOAD_TYPE']].str.lower() == 'laden']
+    ballast_data = vessel_data[vessel_data[COLUMN_NAMES['LOAD_TYPE']].str.lower() == 'ballast']
 
     # Features and target for training
     features = [COLUMN_NAMES['SPEED'], 'trim', COLUMN_NAMES['DISPLACEMENT'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]
