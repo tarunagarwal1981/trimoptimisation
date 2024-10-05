@@ -10,6 +10,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 import plotly.graph_objects as go
 from functools import lru_cache
 from joblib import Parallel, delayed
+import warnings
 
 # DB Configuration
 DB_CONFIG = {
@@ -121,10 +122,6 @@ def train_model(X, y):
     
     return {'MSE': mse, 'R2': r2, 'Model': model, 'Scaler': scaler}
 
-@lru_cache(maxsize=None)
-def optimize_drafts_cached(speed, displacement, model, scaler):
-    return optimize_drafts(model, scaler, speed, displacement)
-
 def optimize_drafts(model, scaler, speed, displacement):
     best_consumption = float('inf')
     best_drafts = None
@@ -135,7 +132,11 @@ def optimize_drafts(model, scaler, speed, displacement):
             aft = mean_draft + trim/2
             if 4 <= fwd <= 15 and 4 <= aft <= 15:
                 X = scaler.transform([[speed, fwd, aft, displacement, trim, mean_draft, fwd/aft]])
-                consumption = model.predict(X)[0]
+                try:
+                    consumption = model.predict(X)[0]
+                except ValueError as e:
+                    warnings.warn(f"Prediction failed for speed {speed}, fwd {fwd}, aft {aft}: {e}")
+                    continue
                 
                 if consumption < best_consumption:
                     best_consumption = consumption
@@ -168,7 +169,7 @@ if vessel_name:
         for condition, data in [("Ballast", df_ballast), ("Laden", df_laden)]:
             if not data.empty:
                 st.subheader(f"{condition} Condition Analysis")
-                X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT'], 
+                X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT'],
                           COLUMN_NAMES['DISPLACEMENT'], 'TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']]
                 y = data[COLUMN_NAMES['ME_CONSUMPTION']]
                 
@@ -182,21 +183,15 @@ if vessel_name:
                 
                 optimized_drafts = []
                 with st.spinner(f"Optimizing drafts for {condition} condition..."):
-                    optimized_drafts = Parallel(n_jobs=-1)(
-                        delayed(optimize_drafts_cached)(speed, avg_displacement, result['Model'], result['Scaler'])
-                        for speed in range(9, 15)
-                    )
+                    for speed in range(9, 15):
+                        best_drafts, best_consumption = optimize_drafts(result['Model'], result['Scaler'], speed, avg_displacement)
+                        optimized_drafts.append({
+                            'Speed': speed,
+                            'FWD Draft': round(best_drafts[0], 2),
+                            'AFT Draft': round(best_drafts[1], 2),
+                            'Estimated Consumption': round(best_consumption, 2)
+                        })
                 
-                final_drafts = [
-                    {
-                        'Speed': speed,
-                        'FWD Draft': round(best_drafts[0], 2),
-                        'AFT Draft': round(best_drafts[1], 2),
-                        'Estimated Consumption': round(best_consumption, 2)
-                    }
-                    for speed, (best_drafts, best_consumption) in zip(range(9, 15), optimized_drafts)
-                ]
-                
-                st.table(pd.DataFrame(final_drafts))
+                st.table(pd.DataFrame(optimized_drafts))
             else:
                 st.warning(f"No data available for {condition.lower()} condition.")
