@@ -7,3 +7,4 @@ scikit-learn    # For machine learning models and metrics
 scipy
 xgboost
 matplotlib
+plotly
