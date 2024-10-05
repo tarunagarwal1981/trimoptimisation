@@ -61,7 +61,7 @@ def get_vessel_data(vessel_name, engine):
 
 # Function to evaluate the model and cache it to avoid retraining
 def train_model(X_train, y_train):
-    model = RandomForestRegressor()
+    model = RandomForestRegressor(n_estimators=100, random_state=42)  # Adding more estimators and a fixed random state for stability
     model.fit(X_train, y_train)
     return model
 
@@ -70,11 +70,11 @@ def optimize_trim(model, speed, displacement):
     def objective(drafts):
         forward_draft, aft_draft = drafts
         trim = aft_draft - forward_draft
-        input_data = np.array([[speed, trim, displacement]])
+        input_data = pd.DataFrame([[speed, trim, displacement]], columns=['SPEED', 'trim', 'DISPLACEMENT'])
         predicted_fuel_consumption = model.predict(input_data)
         return predicted_fuel_consumption[0]  # Minimize this value
 
-    initial_guess = [7.0, 9.0]  # Example starting points for fwd and aft draft
+    initial_guess = [6.0, 8.0]  # Adjusted starting points for fwd and aft draft
     bounds = [(5.0, 12.0), (5.0, 12.0)]  # Fwd and aft draft bounds
     result = minimize(objective, initial_guess, bounds=bounds, method='L-BFGS-B')
     return result.x, result.fun  # Optimal drafts and minimum fuel consumption
