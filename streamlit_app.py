@@ -130,6 +130,47 @@ if st.session_state.vessel_data is not None:
     else:
         st.warning("No data available for laden condition.")
 
+    # Trim Optimization for Speeds between 9-14 knots for laden and ballast
+    st.header('Trim Optimization Results')
+    results_laden = []
+    results_ballast = []
+
+    for speed in range(9, 15):
+        if st.session_state.model_laden is not None:
+            optimal_drafts, min_fuel_consumption = optimize_trim(st.session_state.model_laden, speed, displacement=10000)  # Example displacement
+            results_laden.append({
+                'Speed (knots)': speed,
+                'Loading Condition': 'Laden',
+                'Optimal Forward Draft (m)': optimal_drafts[0],
+                'Optimal Aft Draft (m)': optimal_drafts[1],
+                'Minimum Fuel Consumption (tons/hr)': min_fuel_consumption
+            })
+
+        if st.session_state.model_ballast is not None:
+            optimal_drafts, min_fuel_consumption = optimize_trim(st.session_state.model_ballast, speed, displacement=10000)  # Example displacement
+            results_ballast.append({
+                'Speed (knots)': speed,
+                'Loading Condition': 'Ballast',
+                'Optimal Forward Draft (m)': optimal_drafts[0],
+                'Optimal Aft Draft (m)': optimal_drafts[1],
+                'Minimum Fuel Consumption (tons/hr)': min_fuel_consumption
+            })
+
+    # Display the results as tables
+    if results_laden:
+        st.write("Optimization results for laden condition:")
+        results_laden_df = pd.DataFrame(results_laden)
+        st.dataframe(results_laden_df)
+    else:
+        st.warning("No optimization results available for laden condition.")
+
+    if results_ballast:
+        st.write("Optimization results for ballast condition:")
+        results_ballast_df = pd.DataFrame(results_ballast)
+        st.dataframe(results_ballast_df)
+    else:
+        st.warning("No optimization results available for ballast condition.")
+
     if not ballast_data.empty:
         X_ballast = ballast_data[features]
         y_ballast = ballast_data[target]
