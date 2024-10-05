@@ -4,12 +4,14 @@ import numpy as np
 import psycopg2
 from psycopg2 import OperationalError, Error as PSQLError
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import StandardScaler, PolynomialFeatures
+from sklearn.ensemble import RandomForestRegressor, StackingRegressor, AdaBoostRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.neural_network import MLPRegressor
+from sklearn.tree import DecisionTreeRegressor
 from sklearn.metrics import mean_squared_error, r2_score
 import plotly.graph_objects as go
 from functools import lru_cache
-from joblib import Parallel, delayed
 import warnings
 
 # DB Configuration
@@ -102,8 +104,7 @@ def plot_data(df):
     
     st.plotly_chart(fig_3d)
 
-@st.cache_resource
-def train_model(X, y):
+def train_model(X, y, model_type):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
     # Use a subset of the training data to reduce training time
@@ -113,9 +114,28 @@ def train_model(X, y):
     X_train_scaled = scaler.fit_transform(X_train_sample)
     X_test_scaled = scaler.transform(X_test)
     
-    model = RandomForestRegressor(n_estimators=50, random_state=42)  # Reduced number of estimators
-    model.fit(X_train_scaled, y_train_sample)
+    if model_type == 'Random Forest':
+        model = RandomForestRegressor(n_estimators=50, random_state=42)
+    elif model_type == 'Linear Regression with Polynomial Features':
+        model = Pipeline([
+            ('poly', PolynomialFeatures(degree=2)),
+            ('linear', LinearRegression())
+        ])
+    elif model_type == 'MLP Regressor':
+        model = MLPRegressor(hidden_layer_sizes=(50, 50), max_iter=1000, random_state=42)
+    elif model_type == 'Stacking Regressor':
+        estimators = [
+            ('rf', RandomForestRegressor(n_estimators=10, random_state=42)),
+            ('dt', DecisionTreeRegressor(random_state=42))
+        ]
+        model = StackingRegressor(estimators=estimators, final_estimator=LinearRegression())
+    elif model_type == 'Decision Tree with AdaBoost':
+        model = AdaBoostRegressor(base_estimator=DecisionTreeRegressor(max_depth=5), n_estimators=50, random_state=42)
+    else:
+        st.error("Invalid model type selected.")
+        return None
     
+    model.fit(X_train_scaled, y_train_sample)
     y_pred = model.predict(X_test_scaled)
     mse = mean_squared_error(y_test, y_pred)
     r2 = r2_score(y_test, y_pred)
@@ -147,6 +167,13 @@ def optimize_drafts(model, scaler, speed, displacement):
 st.title("Vessel Draft Optimization")
 
 vessel_name = st.text_input("Enter Vessel Name:")
+model_type = st.sidebar.selectbox("Select Model Type:", [
+    'Random Forest',
+    'Linear Regression with Polynomial Features',
+    'MLP Regressor',
+    'Stacking Regressor',
+    'Decision Tree with AdaBoost'
+])
 
 if vessel_name:
     with st.spinner("Fetching and processing data..."):
@@ -174,24 +201,25 @@ if vessel_name:
                 y = data[COLUMN_NAMES['ME_CONSUMPTION']]
                 
                 with st.spinner(f"Training model for {condition} condition..."):
-                    result = train_model(X, y)
+                    result = train_model(X, y, model_type)
                 
-                st.write(f"Random Forest: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
-                
-                st.subheader(f"Optimized Drafts for {condition} Condition:")
-                avg_displacement = data[COLUMN_NAMES['DISPLACEMENT']].mean()
-                
-                optimized_drafts = []
-                with st.spinner(f"Optimizing drafts for {condition} condition..."):
-                    for speed in range(9, 15):
-                        best_drafts, best_consumption = optimize_drafts(result['Model'], result['Scaler'], speed, avg_displacement)
-                        optimized_drafts.append({
-                            'Speed': speed,
-                            'FWD Draft': round(best_drafts[0], 2),
-                            'AFT Draft': round(best_drafts[1], 2),
-                            'Estimated Consumption': round(best_consumption, 2)
-                        })
-                
-                st.table(pd.DataFrame(optimized_drafts))
+                if result is not None:
+                    st.write(f"{model_type}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
+                    
+                    st.subheader(f"Optimized Drafts for {condition} Condition:")
+                    avg_displacement = data[COLUMN_NAMES['DISPLACEMENT']].mean()
+                    
+                    optimized_drafts = []
+                    with st.spinner(f"Optimizing drafts for {condition} condition..."):
+                        for speed in range(9, 15):
+                            best_drafts, best_consumption = optimize_drafts(result['Model'], result['Scaler'], speed, avg_displacement)
+                            optimized_drafts.append({
+                                'Speed': speed,
+                                'FWD Draft': round(best_drafts[0], 2),
+                                'AFT Draft': round(best_drafts[1], 2),
+                                'Estimated Consumption': round(best_consumption, 2)
+                            })
+                    
+                    st.table(pd.DataFrame(optimized_drafts))
             else:
                 st.warning(f"No data available for {condition.lower()} condition.")
