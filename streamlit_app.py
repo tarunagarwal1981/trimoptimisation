@@ -2,15 +2,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import psycopg2
-from psycopg2 import pool
+from psycopg2 import OperationalError, Error as PSQLError
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.linear_model import LinearRegression
 from sklearn.svm import SVR
 from sklearn.metrics import mean_squared_error, r2_score
-from scipy.optimize import minimize
-import multiprocessing
 
 # DB Configuration
 DB_CONFIG = {
@@ -21,51 +19,50 @@ DB_CONFIG = {
     'port': '6543'
 }
 
-# Database connection pooling
-try:
-    connection_pool = psycopg2.pool.SimpleConnectionPool(1, 10, **DB_CONFIG)
-    if connection_pool:
-        st.info("Connection pool created successfully")
-except Exception as e:
-    st.error(f"Error creating connection pool: {e}")
-
 COLUMN_NAMES = {
-    'vessel_name': 'vessel_name',
-    'report_date': 'report_date',
-    'me_consumption': 'me_consumption',
-    'observerd_distance': 'observerd_distance',
-    'speed': 'speed',
-    'displacement': 'displacement',
-    'steaming_time_hrs': 'steaming_time_hrs',
-    'windforce': 'windforce',
-    'vessel_activity': 'vessel_activity',
-    'load_type': 'load_type',
-    'draftfwd': 'draftfwd',
-    'draftaft': 'draftaft'
+    'VESSEL_NAME': 'VESSEL_NAME',
+    'REPORT_DATE': 'REPORT_DATE',
+    'ME_CONSUMPTION': 'ME_CONSUMPTION',
+    'OBSERVERD_DISTANCE': 'OBSERVERD_DISTANCE',
+    'SPEED': 'SPEED',
+    'DISPLACEMENT': 'DISPLACEMENT',
+    'STEAMING_TIME_HRS': 'STEAMING_TIME_HRS',
+    'WINDFORCE': 'WINDFORCE',
+    'VESSEL_ACTIVITY': 'VESSEL_ACTIVITY',
+    'LOAD_TYPE': 'LOAD_TYPE',
+    'DRAFTFWD': 'DRAFTFWD',
+    'DRAFTAFT': 'DRAFTAFT'
 }
 
 @st.cache_data
 def fetch_data(vessel_name):
     try:
-        conn = connection_pool.getconn()
+        conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
         query = f"""
-        SELECT {', '.join(f'"{col}"' for col in COLUMN_NAMES.values())} FROM sf_consumption_logs
-        WHERE "vessel_name" = %s
-        AND "windforce"::float <= 4
-        AND "steaming_time_hrs"::float >= 16
-        LIMIT 10000
+        SELECT * FROM sf_consumption_logs
+        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
+        AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
+        AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
         """
         df = pd.read_sql_query(query, conn, params=(vessel_name,))
-        connection_pool.putconn(conn)
+        conn.close()
         return df
+    except OperationalError as e:
+        st.error(f"Database connection error: {e}")
+        return pd.DataFrame()
+    except PSQLError as e:
+        st.error(f"Database query error: {e}")
+        return pd.DataFrame()
     except Exception as e:
-        st.error(f"Error fetching data: {e}")
+        st.error(f"An unexpected error occurred: {e}")
         return pd.DataFrame()
 
 def preprocess_data(df):
-    df[COLUMN_NAMES['report_date']] = pd.to_datetime(df[COLUMN_NAMES['report_date']])
-    df = df.apply(pd.to_numeric, errors='coerce')
-    df = df.dropna(subset=[COLUMN_NAMES['me_consumption'], COLUMN_NAMES['speed'], COLUMN_NAMES['draftfwd'], COLUMN_NAMES['draftaft']])
+    df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
+    df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']].astype(float) > 0) &
+            (df[COLUMN_NAMES['SPEED']].astype(float) > 0) &
+            (df[COLUMN_NAMES['DRAFTFWD']].astype(float) > 0) &
+            (df[COLUMN_NAMES['DRAFTAFT']].astype(float) > 0)]
     return df
 
 def train_and_evaluate_models(X, y):
@@ -76,41 +73,36 @@ def train_and_evaluate_models(X, y):
     X_test_scaled = scaler.transform(X_test)
     
     models = {
-        'Random Forest': RandomForestRegressor(n_estimators=50, random_state=42, n_jobs=-1),
-        'Linear Regression': LinearRegression(n_jobs=-1),
+        'Random Forest': RandomForestRegressor(n_estimators=100, random_state=42),
+        'Linear Regression': LinearRegression(),
         'SVR': SVR(kernel='rbf')
     }
     
     results = {}
     
-    def train_model(name, model):
+    for name, model in models.items():
         model.fit(X_train_scaled, y_train)
         y_pred = model.predict(X_test_scaled)
         mse = mean_squared_error(y_test, y_pred)
         r2 = r2_score(y_test, y_pred)
         results[name] = {'MSE': mse, 'R2': r2, 'Model': model, 'Scaler': scaler}
     
-    processes = []
-    for name, model in models.items():
-        p = multiprocessing.Process(target=train_model, args=(name, model))
-        processes.append(p)
-        p.start()
-    
-    for p in processes:
-        p.join()
-    
     return results
 
 def optimize_drafts(model, scaler, speed):
-    def objective(drafts):
-        fwd, aft = drafts
-        X = scaler.transform([[speed, fwd, aft]])
-        return model.predict(X)[0]
+    best_consumption = float('inf')
+    best_drafts = None
     
-    bounds = [(4, 15), (4, 15)]  # Forward and aft draft bounds
-    initial_guess = [7, 7]
-    result = minimize(objective, initial_guess, bounds=bounds, method='L-BFGS-B')
-    return result.x, result.fun
+    for fwd in np.arange(4, 15, 0.1):
+        for aft in np.arange(4, 15, 0.1):
+            X = scaler.transform([[speed, fwd, aft]])
+            consumption = model.predict(X)[0]
+            
+            if consumption < best_consumption:
+                best_consumption = consumption
+                best_drafts = (fwd, aft)
+    
+    return best_drafts, best_consumption
 
 st.title("Vessel Draft Optimization")
 
@@ -125,13 +117,13 @@ if vessel_name:
         df = preprocess_data(df)
         
         # Separate ballast and laden conditions
-        df_ballast = df[df[COLUMN_NAMES['load_type']] == 'ballast']
-        df_laden = df[df[COLUMN_NAMES['load_type']] == 'laden']
+        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
+        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
         
         # Train models for ballast condition
         if not df_ballast.empty:
-            X_ballast = df_ballast[[COLUMN_NAMES['speed'], COLUMN_NAMES['draftfwd'], COLUMN_NAMES['draftaft']]].astype(float)
-            y_ballast = df_ballast[COLUMN_NAMES['me_consumption']].astype(float)
+            X_ballast = df_ballast[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
+            y_ballast = df_ballast[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
             ballast_results = train_and_evaluate_models(X_ballast, y_ballast)
             
             st.subheader("Ballast Condition Results:")
@@ -148,8 +140,8 @@ if vessel_name:
         
         # Train models for laden condition
         if not df_laden.empty:
-            X_laden = df_laden[[COLUMN_NAMES['speed'], COLUMN_NAMES['draftfwd'], COLUMN_NAMES['draftaft']]].astype(float)
-            y_laden = df_laden[COLUMN_NAMES['me_consumption']].astype(float)
+            X_laden = df_laden[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']]].astype(float)
+            y_laden = df_laden[COLUMN_NAMES['ME_CONSUMPTION']].astype(float)
             laden_results = train_and_evaluate_models(X_laden, y_laden)
             
             st.subheader("Laden Condition Results:")
