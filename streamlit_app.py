@@ -131,7 +131,7 @@ def train_model(X, y, model_type):
         ]
         model = StackingRegressor(estimators=estimators, final_estimator=LinearRegression())
     elif model_type == 'Decision Tree with AdaBoost':
-        model = AdaBoostRegressor(base_estimator=DecisionTreeRegressor(max_depth=5), n_estimators=50, random_state=42)
+        model = AdaBoostRegressor(estimator=DecisionTreeRegressor(max_depth=5), n_estimators=50, random_state=42)
     else:
         st.error("Invalid model type selected.")
         return None
