@@ -61,7 +61,10 @@ def fetch_data(vessel_name):
         st.error(f"Error fetching data: {e}")
         return pd.DataFrame()
 
-    df = df.dropna(subset=[COLUMN_NAMES['LOAD_TYPE']])
+def preprocess_data(df):
+    df = df.dropna(subset=[COLUMN_NAMES['LOAD_TYPE']])
+    df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
+    df = df.apply(pd.to_numeric, errors='coerce')
     df = df.dropna(subset=[COLUMN_NAMES['ME_CONSUMPTION'], COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT']])
     df['MEAN_DRAFT'] = (df[COLUMN_NAMES['DRAFTAFT']] + df[COLUMN_NAMES['DRAFTFWD']]) / 2
     return df
