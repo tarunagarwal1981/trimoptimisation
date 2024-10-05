@@ -46,8 +46,8 @@ def get_vessel_data(vessel_name, engine):
     vessel_name = vessel_name.strip().upper().replace("'", "''")  # Handling special characters and uppercasing
 
     query = f"""
-    SELECT * FROM sf_consumption_logs 
-    WHERE "VESSEL_NAME" = upper('{vessel_name}') 
+    SELECT * FROM sf_consumption_logs
+    WHERE "VESSEL_NAME" = upper('{vessel_name}')
     AND "REPORT_DATE" >= '{datetime.now() - timedelta(days=180)}'
     AND "WINDFORCE" <= 4
     """
@@ -104,7 +104,7 @@ if st.session_state.vessel_data is not None:
     st.dataframe(st.session_state.vessel_data)
 
     # Preprocess the data, calculating trim as DRAFTAFT - DRAFTFWD
-    vessel_data = st.session_state.vessel_data
+    vessel_data = st.session_state.vessel_data.dropna(subset=[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTAFT'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DISPLACEMENT'], COLUMN_NAMES['ME_CONSUMPTION']])
     vessel_data['trim'] = vessel_data[COLUMN_NAMES['DRAFTAFT']] - vessel_data[COLUMN_NAMES['DRAFTFWD']]
     features = [COLUMN_NAMES['SPEED'], 'trim', COLUMN_NAMES['DISPLACEMENT']]
     target = COLUMN_NAMES['ME_CONSUMPTION']
@@ -113,35 +113,39 @@ if st.session_state.vessel_data is not None:
     X = vessel_data[features]
     y = vessel_data[target]
 
-    # Train the model and store it in session state
-    if st.session_state.model is None:
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-        st.session_state.model = train_model(X_train, y_train)
+    # Check if there are any NaN values or if the dataset is empty
+    if X.isnull().values.any() or y.isnull().values.any() or X.empty or y.empty:
+        st.error("Data contains missing values or is insufficient for training. Please check the data quality.")
+    else:
+        # Train the model and store it in session state
+        if st.session_state.model is None:
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
+            st.session_state.model = train_model(X_train, y_train)
 
-        # Display model performance
-        y_pred = st.session_state.model.predict(X_test)
-        rmse = np.sqrt(mean_squared_error(y_test, y_pred))
-        mae = mean_absolute_error(y_test, y_pred)
-        r2 = st.session_state.model.score(X_test, y_test)
+            # Display model performance
+            y_pred = st.session_state.model.predict(X_test)
+            rmse = np.sqrt(mean_squared_error(y_test, y_pred))
+            mae = mean_absolute_error(y_test, y_pred)
+            r2 = st.session_state.model.score(X_test, y_test)
 
-        st.write(f'RMSE: {rmse:.4f}')
-        st.write(f'MAE: {mae:.4f}')
-        st.write(f'R² Score: {r2:.4f}')
+            st.write(f'RMSE: {rmse:.4f}')
+            st.write(f'MAE: {mae:.4f}')
+            st.write(f'R² Score: {r2:.4f}')
 
-    # Trim Optimization for Speeds between 9-14 knots
-    st.header('Trim Optimization Results')
-    results = []
-    for speed in range(9, 15):
-        optimal_drafts, min_fuel_consumption = optimize_trim(st.session_state.model, speed, displacement=10000)  # Example displacement
-        results.append({
-            'Speed (knots)': speed,
-            'Loading Condition': 'Ballast',  # Example loading condition
-            'Optimal Forward Draft (m)': optimal_drafts[0],
-            'Optimal Aft Draft (m)': optimal_drafts[1],
-            'Minimum Fuel Consumption (tons/hr)': min_fuel_consumption
-        })
+        # Trim Optimization for Speeds between 9-14 knots
+        st.header('Trim Optimization Results')
+        results = []
+        for speed in range(9, 15):
+            optimal_drafts, min_fuel_consumption = optimize_trim(st.session_state.model, speed, displacement=10000)  # Example displacement
+            results.append({
+                'Speed (knots)': speed,
+                'Loading Condition': 'Ballast',  # Example loading condition
+                'Optimal Forward Draft (m)': optimal_drafts[0],
+                'Optimal Aft Draft (m)': optimal_drafts[1],
+                'Minimum Fuel Consumption (tons/hr)': min_fuel_consumption
+            })
 
-    # Display the results as a table
-    results_df = pd.DataFrame(results)
-    st.write("Optimization results for speeds between 9 and 14 knots:")
-    st.dataframe(results_df)
+        # Display the results as a table
+        results_df = pd.DataFrame(results)
+        st.write("Optimization results for speeds between 9 and 14 knots:")
+        st.dataframe(results_df)
