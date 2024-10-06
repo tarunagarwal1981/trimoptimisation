@@ -42,31 +42,28 @@ COLUMN_NAMES = {
 @st.cache_data
 def fetch_data(vessel_name):
     try:
-        conn = psycopg2.connect(**DB_CONFIG, connect_timeout=10)
-        query = f"""
-        SELECT * FROM sf_consumption_logs
-        WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
-        AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
-        AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
-        """
-        df = pd.read_sql_query(query, conn, params=(vessel_name,))
-        conn.close()
+        with psycopg2.connect(**DB_CONFIG, connect_timeout=10) as conn:
+            query = f"""
+            SELECT * FROM sf_consumption_logs
+            WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
+            AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
+            AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
+            """
+            df = pd.read_sql_query(query, conn, params=(vessel_name,))
         return df
     except OperationalError as e:
         st.error(f"Database connection error: {e}")
-        return pd.DataFrame()
     except PSQLError as e:
         st.error(f"Database query error: {e}")
-        return pd.DataFrame()
     except Exception as e:
         st.error(f"An unexpected error occurred: {e}")
-        return pd.DataFrame()
+    return pd.DataFrame()
 
 @st.cache_data
 def preprocess_data(df):
     df[COLUMN_NAMES['REPORT_DATE']] = pd.to_datetime(df[COLUMN_NAMES['REPORT_DATE']])
-    for col in ['ME_CONSUMPTION', 'SPEED', 'DRAFTFWD', 'DRAFTAFT', 'DISPLACEMENT', 'STEAMING_TIME_HRS', 'WINDFORCE']:
-        df[COLUMN_NAMES[col]] = pd.to_numeric(df[COLUMN_NAMES[col]], errors='coerce')
+    numeric_columns = ['ME_CONSUMPTION', 'SPEED', 'DRAFTFWD', 'DRAFTAFT', 'DISPLACEMENT', 'STEAMING_TIME_HRS', 'WINDFORCE']
+    df[numeric_columns] = df[numeric_columns].apply(pd.to_numeric, errors='coerce')
     
     df = df[(df[COLUMN_NAMES['ME_CONSUMPTION']] > 0) &
             (df[COLUMN_NAMES['SPEED']] > 0) &
@@ -108,34 +105,38 @@ def plot_data(df):
 def train_model(X, y, model_type):
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
     
-    # Use a subset of the training data to reduce training time
     X_train_sample, _, y_train_sample, _ = train_test_split(X_train, y_train, train_size=0.5, random_state=42)
     
     scaler = StandardScaler()
     X_train_scaled = scaler.fit_transform(X_train_sample)
     X_test_scaled = scaler.transform(X_test)
     
-    if model_type == 'Random Forest':
-        model = RandomForestRegressor(n_estimators=50, random_state=42)
-    elif model_type == 'Linear Regression with Polynomial Features':
-        model = Pipeline([
+    models = {
+        'Random Forest': RandomForestRegressor(n_estimators=50, random_state=42),
+        'Linear Regression with Polynomial Features': Pipeline([
             ('poly', PolynomialFeatures(degree=2)),
             ('linear', LinearRegression())
-        ])
-    elif model_type == 'MLP Regressor':
-        model = MLPRegressor(hidden_layer_sizes=(50, 50), max_iter=1000, random_state=42)
-    elif model_type == 'Stacking Regressor':
-        estimators = [
-            ('rf', RandomForestRegressor(n_estimators=10, random_state=42)),
-            ('dt', DecisionTreeRegressor(random_state=42))
-        ]
-        model = StackingRegressor(estimators=estimators, final_estimator=LinearRegression())
-    elif model_type == 'Decision Tree with AdaBoost':
-        model = AdaBoostRegressor(estimator=DecisionTreeRegressor(max_depth=5), n_estimators=50, random_state=42)
-    else:
+        ]),
+        'MLP Regressor': MLPRegressor(hidden_layer_sizes=(50, 50), max_iter=1000, random_state=42),
+        'Stacking Regressor': StackingRegressor(
+            estimators=[
+                ('rf', RandomForestRegressor(n_estimators=10, random_state=42)),
+                ('dt', DecisionTreeRegressor(random_state=42))
+            ],
+            final_estimator=LinearRegression()
+        ),
+        'Decision Tree with AdaBoost': AdaBoostRegressor(
+            estimator=DecisionTreeRegressor(max_depth=5),
+            n_estimators=50,
+            random_state=42
+        )
+    }
+    
+    if model_type not in models:
         st.error("Invalid model type selected.")
         return None
     
+    model = models[model_type]
     model.fit(X_train_scaled, y_train_sample)
     y_pred = model.predict(X_test_scaled)
     mse = mean_squared_error(y_test, y_pred)
@@ -165,62 +166,63 @@ def optimize_drafts(model, scaler, speed, displacement):
     
     return best_drafts, best_consumption
 
-st.title("Vessel Draft Optimization")
+def main():
+    st.title("Vessel Draft Optimization")
 
-vessel_name = st.text_input("Enter Vessel Name:")
-model_type = st.sidebar.selectbox("Select Model Type:", [
-    'Random Forest',
-    'Linear Regression with Polynomial Features',
-    'MLP Regressor',
-    'Stacking Regressor',
-    'Decision Tree with AdaBoost'
-])
+    vessel_name = st.text_input("Enter Vessel Name:")
+    model_type = st.sidebar.selectbox("Select Model Type:", [
+        'Random Forest',
+        'Linear Regression with Polynomial Features',
+        'MLP Regressor',
+        'Stacking Regressor',
+        'Decision Tree with AdaBoost'
+    ])
 
-if vessel_name:
-    with st.spinner("Fetching and processing data..."):
-        df = fetch_data(vessel_name)
-    
-    if df.empty:
-        st.warning("No data retrieved. Please check the vessel name and try again.")
-    else:
-        df = preprocess_data(df)
+    if vessel_name:
+        with st.spinner("Fetching and processing data..."):
+            df = fetch_data(vessel_name)
         
-        st.subheader("Data Overview")
-        st.dataframe(df[list(COLUMN_NAMES.values()) + ['TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']])
-        
-        plot_data(df)
-        
-        # Separate ballast and laden conditions
-        df_ballast = df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']
-        df_laden = df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast']
-        
-        for condition, data in [("Ballast", df_ballast), ("Laden", df_laden)]:
-            if not data.empty:
-                st.subheader(f"{condition} Condition Analysis")
-                X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT'],
-                          COLUMN_NAMES['DISPLACEMENT'], 'TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']]
-                y = data[COLUMN_NAMES['ME_CONSUMPTION']]
-                
-                with st.spinner(f"Training model for {condition} condition..."):
-                    result = train_model(X, y, model_type)
-                
-                if result is not None:
-                    st.write(f"{model_type}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
+        if df.empty:
+            st.warning("No data retrieved. Please check the vessel name and try again.")
+        else:
+            df = preprocess_data(df)
+            
+            st.subheader("Data Overview")
+            st.dataframe(df[list(COLUMN_NAMES.values()) + ['TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']])
+            
+            plot_data(df)
+            
+            for condition, data in [("Ballast", df[df[COLUMN_NAMES['LOAD_TYPE']] == 'Ballast']),
+                                    ("Laden", df[df[COLUMN_NAMES['LOAD_TYPE']] != 'Ballast'])]:
+                if not data.empty:
+                    st.subheader(f"{condition} Condition Analysis")
+                    X = data[[COLUMN_NAMES['SPEED'], COLUMN_NAMES['DRAFTFWD'], COLUMN_NAMES['DRAFTAFT'],
+                              COLUMN_NAMES['DISPLACEMENT'], 'TRIM', 'MEAN_DRAFT', 'DRAFT_RATIO']]
+                    y = data[COLUMN_NAMES['ME_CONSUMPTION']]
                     
-                    st.subheader(f"Optimized Drafts for {condition} Condition:")
-                    avg_displacement = data[COLUMN_NAMES['DISPLACEMENT']].mean()
+                    with st.spinner(f"Training model for {condition} condition..."):
+                        result = train_model(X, y, model_type)
                     
-                    optimized_drafts = []
-                    with st.spinner(f"Optimizing drafts for {condition} condition..."):
-                        for speed in range(9, 15):
-                            best_drafts, best_consumption = optimize_drafts(result['Model'], result['Scaler'], speed, avg_displacement)
-                            optimized_drafts.append({
-                                'Speed': speed,
-                                'FWD Draft': round(best_drafts[0], 2),
-                                'AFT Draft': round(best_drafts[1], 2),
-                                'Estimated Consumption': round(best_consumption, 2)
-                            })
-                    
-                    st.table(pd.DataFrame(optimized_drafts))
-            else:
-                st.warning(f"No data available for {condition.lower()} condition.")
+                    if result is not None:
+                        st.write(f"{model_type}: MSE = {result['MSE']:.4f}, R2 = {result['R2']:.4f}")
+                        
+                        st.subheader(f"Optimized Drafts for {condition} Condition:")
+                        avg_displacement = data[COLUMN_NAMES['DISPLACEMENT']].mean()
+                        
+                        optimized_drafts = []
+                        with st.spinner(f"Optimizing drafts for {condition} condition..."):
+                            for speed in range(9, 15):
+                                best_drafts, best_consumption = optimize_drafts(result['Model'], result['Scaler'], speed, avg_displacement)
+                                optimized_drafts.append({
+                                    'Speed': speed,
+                                    'FWD Draft': round(best_drafts[0], 2),
+                                    'AFT Draft': round(best_drafts[1], 2),
+                                    'Estimated Consumption': round(best_consumption, 2)
+                                })
+                        
+                        st.table(pd.DataFrame(optimized_drafts))
+                else:
+                    st.warning(f"No data available for {condition.lower()} condition.")
+
+if __name__ == "__main__":
+    main()
