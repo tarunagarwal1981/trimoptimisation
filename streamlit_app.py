@@ -16,6 +16,7 @@ from typing import Dict, List, Tuple, Optional
 import logging
 import os
 import traceback
+import time
 
 # Set up logging
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -46,31 +47,71 @@ COLUMN_NAMES = {
 }
 
 @st.cache_data
-def fetch_data(vessel_name: str) -> pd.DataFrame:
+def fetch_data(vessel_name: str, max_retries: int = 3, page_size: int = 1000) -> pd.DataFrame:
     logger.debug(f"Fetching data for vessel: {vessel_name}")
-    try:
-        with psycopg2.connect(**DB_CONFIG, connect_timeout=10) as conn:
-            query = f"""
-            SELECT * FROM sf_consumption_logs
-            WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
-            AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
-            AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
-            """
-            df = pd.read_sql_query(query, conn, params=(vessel_name,))
-        if df.empty:
-            logger.warning(f"No data found for vessel: {vessel_name}")
-            st.warning("No data found for the specified vessel name.")
-        return df
-    except OperationalError as e:
-        logger.error(f"Database connection error: {e}")
-        st.error(f"Unable to connect to the database. Please check your connection and try again. Error: {e}")
-    except PSQLError as e:
-        logger.error(f"Database query error: {e}")
-        st.error(f"An error occurred while querying the database. Please try again later. Error: {e}")
-    except Exception as e:
-        logger.error(f"Unexpected error in fetch_data: {e}")
-        logger.error(traceback.format_exc())
-        st.error(f"An unexpected error occurred while fetching data. Please try again later. Error: {e}")
+    
+    for attempt in range(max_retries):
+        try:
+            with psycopg2.connect(**DB_CONFIG, connect_timeout=30) as conn:
+                conn.set_session(autocommit=True)
+                
+                # Set a statement timeout of 60 seconds
+                with conn.cursor() as cur:
+                    cur.execute("SET statement_timeout = 60000;")
+                
+                offset = 0
+                dataframes = []
+                
+                while True:
+                    query = f"""
+                    SELECT * FROM sf_consumption_logs
+                    WHERE "{COLUMN_NAMES['VESSEL_NAME']}" = %s
+                    AND "{COLUMN_NAMES['WINDFORCE']}"::float <= 4
+                    AND "{COLUMN_NAMES['STEAMING_TIME_HRS']}"::float >= 16
+                    ORDER BY "{COLUMN_NAMES['REPORT_DATE']}"
+                    LIMIT {page_size} OFFSET {offset}
+                    """
+                    
+                    df_chunk = pd.read_sql_query(query, conn, params=(vessel_name,))
+                    
+                    if df_chunk.empty:
+                        break
+                    
+                    dataframes.append(df_chunk)
+                    offset += page_size
+                    
+                    if len(df_chunk) < page_size:
+                        break
+                
+                df = pd.concat(dataframes, ignore_index=True)
+                
+                if df.empty:
+                    logger.warning(f"No data found for vessel: {vessel_name}")
+                    st.warning("No data found for the specified vessel name.")
+                return df
+            
+        except OperationalError as e:
+            logger.error(f"Database connection error (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                st.error(f"Unable to connect to the database after {max_retries} attempts. Please try again later.")
+                return pd.DataFrame()
+            time.sleep(2 ** attempt)  # Exponential backoff
+            
+        except PSQLError as e:
+            logger.error(f"Database query error (attempt {attempt + 1}/{max_retries}): {e}")
+            if attempt == max_retries - 1:
+                st.error(f"An error occurred while querying the database. Please try again later. Error: {e}")
+                return pd.DataFrame()
+            time.sleep(2 ** attempt)  # Exponential backoff
+            
+        except Exception as e:
+            logger.error(f"Unexpected error in fetch_data (attempt {attempt + 1}/{max_retries}): {e}")
+            logger.error(traceback.format_exc())
+            if attempt == max_retries - 1:
+                st.error(f"An unexpected error occurred while fetching data. Please try again later. Error: {e}")
+                return pd.DataFrame()
+            time.sleep(2 ** attempt)  # Exponential backoff
+    
     return pd.DataFrame()
 
 @st.cache_data
