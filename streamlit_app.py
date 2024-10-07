@@ -6,7 +6,6 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, r2_score
 import psycopg2
-from psycopg2 import sql
 import os
 from datetime import datetime, timedelta
 from scipy.optimize import minimize
@@ -24,7 +23,7 @@ def fetch_data(vessel_name):
     try:
         conn = psycopg2.connect(**DB_CONFIG)
         one_year_ago = datetime.now() - timedelta(days=365)
-        query = sql.SQL("""
+        query = """
             SELECT "VESSEL_NAME", "ME_CONSUMPTION", "SPEED", "DRAFTFWD", "DRAFTAFT", 
                    "DISPLACEMENT", "LOAD_TYPE", "REPORT_DATE"
             FROM sf_consumption_logs
@@ -32,7 +31,7 @@ def fetch_data(vessel_name):
             AND "REPORT_DATE" >= %s
             AND "WINDFORCE"::float <= 4 
             AND "STEAMING_TIME_HRS"::float >= 16
-        """)
+        """
         df = pd.read_sql_query(query, conn, params=(vessel_name, one_year_ago))
         conn.close()
         return df
