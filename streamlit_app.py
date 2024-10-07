@@ -71,14 +71,23 @@ def optimize_drafts(model, scaler, speed, displacement, min_fwd, max_fwd, min_af
     bounds = ((min_fwd, max_fwd), (min_aft, max_aft))
     initial_guess = [(min_fwd + max_fwd) / 2, (min_aft + max_aft) / 2]
     
+    constraints = (
+        {'type': 'ineq', 'fun': lambda x: x[1] - x[0]},  # Ensure AFT >= FWD
+        {'type': 'ineq', 'fun': lambda x: max_fwd - x[0]},  # Ensure FWD <= max_fwd
+        {'type': 'ineq', 'fun': lambda x: x[0] - min_fwd},  # Ensure FWD >= min_fwd
+        {'type': 'ineq', 'fun': lambda x: max_aft - x[1]},  # Ensure AFT <= max_aft
+        {'type': 'ineq', 'fun': lambda x: x[1] - min_aft}   # Ensure AFT >= min_aft
+    )
+    
     result = minimize(
         objective_function,
         initial_guess,
-        method='L-BFGS-B',
-        bounds=bounds
+        method='SLSQP',
+        bounds=bounds,
+        constraints=constraints
     )
     
-    return result.x, result.fun
+    return result.x, objective_function(result.x)
 
 def main():
     st.title("Vessel Draft Optimization")
@@ -127,6 +136,16 @@ def main():
                     })
                 
                 st.table(pd.DataFrame(optimized_drafts))
+
+                # Validation checks
+                if any(draft['FWD Draft'] > draft['AFT Draft'] for draft in optimized_drafts):
+                    st.warning("Warning: Some optimized forward drafts are greater than aft drafts. This may indicate an issue with the optimization process.")
+
+                if any(draft['FWD Draft'] < min_fwd or draft['FWD Draft'] > max_fwd or 
+                       draft['AFT Draft'] < min_aft or draft['AFT Draft'] > max_aft for draft in optimized_drafts):
+                    st.warning("Warning: Some optimized drafts are outside the range of the input data. This may indicate an issue with the optimization process.")
+
+                st.write(f"Input data draft ranges: FWD [{min_fwd:.2f}, {max_fwd:.2f}], AFT [{min_aft:.2f}, {max_aft:.2f}]")
 
 if __name__ == "__main__":
     main()
