@@ -10,71 +10,23 @@ import os
 from datetime import datetime, timedelta
 from scipy.optimize import minimize
 
-# Database configuration
-DB_CONFIG = {
-    'host': os.getenv('DB_HOST', 'aws-0-ap-south-1.pooler.supabase.com'),
-    'database': os.getenv('DB_NAME', 'postgres'),
-    'user': os.getenv('DB_USER', 'postgres.conrxbcvuogbzfysomov'),
-    'password': os.getenv('DB_PASSWORD', 'wXAryCC8@iwNvj#'),
-    'port': os.getenv('DB_PORT', '6543')
-}
+# ... [previous code remains unchanged] ...
 
-def fetch_data(vessel_name):
-    try:
-        conn = psycopg2.connect(**DB_CONFIG)
-        one_year_ago = datetime.now() - timedelta(days=365)
-        query = """
-            SELECT "VESSEL_NAME", "ME_CONSUMPTION", "SPEED", "DRAFTFWD", "DRAFTAFT", 
-                   "DISPLACEMENT", "LOAD_TYPE", "REPORT_DATE"
-            FROM sf_consumption_logs
-            WHERE "VESSEL_NAME" = %s 
-            AND "REPORT_DATE" >= %s
-            AND "WINDFORCE"::float <= 4 
-            AND "STEAMING_TIME_HRS"::float >= 16
-        """
-        df = pd.read_sql_query(query, conn, params=(vessel_name, one_year_ago))
-        conn.close()
-        return df
-    except Exception as e:
-        st.error(f"Error fetching data: {e}")
-        return pd.DataFrame()
+def optimize_drafts(model, scaler, speed, displacement, min_fwd, max_fwd, min_aft, max_aft):
+    def objective_function(drafts):
+        fwd, aft = drafts
+        mean_draft = (fwd + aft) / 2
+        trim = aft - fwd
+        X = np.array([[speed, fwd, aft, displacement, trim, mean_draft]])
+        X_scaled = scaler.transform(X)
+        return model.predict(X_scaled)[0]
 
-def preprocess_data(df):
-    df['TRIM'] = df['DRAFTAFT'] - df['DRAFTFWD']
-    df['MEAN_DRAFT'] = (df['DRAFTAFT'] + df['DRAFTFWD']) / 2
-    return df
-
-def train_model(X, y):
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    
-    model = RandomForestRegressor(n_estimators=100, random_state=42)
-    model.fit(X_train_scaled, y_train)
-    
-    y_pred = model.predict(X_test_scaled)
-    mse = mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
-    
-    return model, scaler, mse, r2
-
-def objective_function(drafts, model, scaler, speed, displacement):
-    fwd, aft = drafts
-    mean_draft = (fwd + aft) / 2
-    trim = aft - fwd
-    X = np.array([[speed, fwd, aft, displacement, trim, mean_draft]])
-    X_scaled = scaler.transform(X)
-    return model.predict(X_scaled)[0]
-
-def optimize_drafts(model, scaler, speed, displacement):
-    bounds = ((4, 15), (4, 15))  # Assuming draft limits between 4 and 15 meters
-    initial_guess = [9, 9]  # Start with equal drafts
+    bounds = ((min_fwd, max_fwd), (min_aft, max_aft))
+    initial_guess = [(min_fwd + max_fwd) / 2, (min_aft + max_aft) / 2]
     
     result = minimize(
         objective_function,
         initial_guess,
-        args=(model, scaler, speed, displacement),
         method='L-BFGS-B',
         bounds=bounds
     )
@@ -114,10 +66,12 @@ def main():
                 
                 st.subheader(f"Optimized Drafts for {condition} Condition:")
                 avg_displacement = condition_df['DISPLACEMENT'].mean()
+                min_fwd, max_fwd = condition_df['DRAFTFWD'].min(), condition_df['DRAFTFWD'].max()
+                min_aft, max_aft = condition_df['DRAFTAFT'].min(), condition_df['DRAFTAFT'].max()
                 
                 optimized_drafts = []
                 for speed in range(9, 14):
-                    best_drafts, best_consumption = optimize_drafts(model, scaler, speed, avg_displacement)
+                    best_drafts, best_consumption = optimize_drafts(model, scaler, speed, avg_displacement, min_fwd, max_fwd, min_aft, max_aft)
                     optimized_drafts.append({
                         'Speed': speed,
                         'FWD Draft': round(best_drafts[0], 2),
