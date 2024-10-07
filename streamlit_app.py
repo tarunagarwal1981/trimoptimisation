@@ -8,7 +8,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 import psycopg2
 import os
 from datetime import datetime, timedelta
-from scipy.optimize import minimize
+from scipy.optimize import differential_evolution
 
 # Database configuration
 DB_CONFIG = {
@@ -68,26 +68,19 @@ def optimize_drafts(model, scaler, speed, displacement, min_fwd, max_fwd, min_af
         X_scaled = scaler.transform(X)
         return model.predict(X_scaled)[0]
 
-    bounds = ((min_fwd, max_fwd), (min_aft, max_aft))
-    initial_guess = [(min_fwd + max_fwd) / 2, (min_aft + max_aft) / 2]
+    bounds = [(min_fwd, max_fwd), (min_aft, max_aft)]
     
-    constraints = (
-        {'type': 'ineq', 'fun': lambda x: x[1] - x[0]},  # Ensure AFT >= FWD
-        {'type': 'ineq', 'fun': lambda x: max_fwd - x[0]},  # Ensure FWD <= max_fwd
-        {'type': 'ineq', 'fun': lambda x: x[0] - min_fwd},  # Ensure FWD >= min_fwd
-        {'type': 'ineq', 'fun': lambda x: max_aft - x[1]},  # Ensure AFT <= max_aft
-        {'type': 'ineq', 'fun': lambda x: x[1] - min_aft}   # Ensure AFT >= min_aft
-    )
-    
-    result = minimize(
+    result = differential_evolution(
         objective_function,
-        initial_guess,
-        method='SLSQP',
-        bounds=bounds,
-        constraints=constraints
+        bounds,
+        mutation=(0.5, 1),
+        recombination=0.7,
+        popsize=20,
+        tol=0.01,
+        polish=True
     )
     
-    return result.x, objective_function(result.x)
+    return result.x, result.fun
 
 def main():
     st.title("Vessel Draft Optimization")
