@@ -94,31 +94,39 @@ def main():
             st.subheader("Data Overview")
             st.dataframe(df)
             
-            X = df[['SPEED', 'DRAFTFWD', 'DRAFTAFT', 'DISPLACEMENT', 'TRIM', 'MEAN_DRAFT']]
-            y = df['ME_CONSUMPTION']
-            
-            model, scaler = train_model(X, y)
-            
-            st.subheader("Optimized Trim:")
-            avg_displacement = df['DISPLACEMENT'].mean()
-            min_fwd, max_fwd = df['DRAFTFWD'].min(), df['DRAFTFWD'].max()
-            min_aft, max_aft = df['DRAFTAFT'].min(), df['DRAFTAFT'].max()
-            
-            optimized_trims = []
-            for speed in range(9, 14):
-                best_drafts, best_consumption = optimize_drafts(model, scaler, speed, avg_displacement, min_fwd, max_fwd, min_aft, max_aft)
-                trim = best_drafts[1] - best_drafts[0]
-                optimized_trims.append({
-                    'Speed': round(speed, 1),
-                    'Trim': round(trim, 1),
-                    'Estimated Consumption': round(best_consumption, 1)
-                })
-            
-            st.table(pd.DataFrame(optimized_trims))
+            for condition in ['Ballast', 'Laden']:
+                st.subheader(f"{condition} Condition Analysis")
+                condition_df = df[df['LOAD_TYPE'] == condition]
+                
+                if condition_df.empty:
+                    st.warning(f"No data available for {condition.lower()} condition.")
+                    continue
+                
+                X = condition_df[['SPEED', 'DRAFTFWD', 'DRAFTAFT', 'DISPLACEMENT', 'TRIM', 'MEAN_DRAFT']]
+                y = condition_df['ME_CONSUMPTION']
+                
+                model, scaler = train_model(X, y)
+                
+                st.subheader(f"Optimized Trim for {condition} Condition:")
+                avg_displacement = condition_df['DISPLACEMENT'].mean()
+                min_fwd, max_fwd = condition_df['DRAFTFWD'].min(), condition_df['DRAFTFWD'].max()
+                min_aft, max_aft = condition_df['DRAFTAFT'].min(), condition_df['DRAFTAFT'].max()
+                
+                optimized_trims = []
+                for speed in range(9, 14):
+                    best_drafts, best_consumption = optimize_drafts(model, scaler, speed, avg_displacement, min_fwd, max_fwd, min_aft, max_aft)
+                    trim = round(best_drafts[1] - best_drafts[0], 1)
+                    optimized_trims.append({
+                        'Speed': speed,
+                        'Trim': trim,
+                        'Estimated Consumption': round(best_consumption, 1)
+                    })
+                
+                st.table(pd.DataFrame(optimized_trims))
 
-            # Validation checks
-            if any(trim['Trim'] < 0 for trim in optimized_trims):
-                st.warning("Warning: Some optimized trims are negative. This may indicate an issue with the optimization process.")
+                # Validation checks
+                if any(trim['Trim'] < 0 for trim in optimized_trims):
+                    st.warning("Warning: Some optimized trims are negative. This may indicate an issue with the optimization process.")
 
 if __name__ == "__main__":
     main()
