@@ -4,7 +4,6 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error
 import psycopg2
 import os
 from datetime import datetime, timedelta
@@ -53,10 +52,7 @@ def train_model(X, y):
     model = RandomForestRegressor(n_estimators=100, random_state=42)
     model.fit(X_train_scaled, y_train)
     
-    y_pred = model.predict(X_test_scaled)
-    mse = mean_squared_error(y_test, y_pred)
-    
-    return model, scaler, mse
+    return model, scaler
 
 def optimize_drafts(model, scaler, speed, displacement, min_fwd, max_fwd, min_aft, max_aft):
     def objective_function(drafts):
@@ -101,8 +97,7 @@ def main():
             X = df[['SPEED', 'DRAFTFWD', 'DRAFTAFT', 'DISPLACEMENT', 'TRIM', 'MEAN_DRAFT']]
             y = df['ME_CONSUMPTION']
             
-            model, scaler, mse = train_model(X, y)
-            st.write(f"Model performance: MSE = {mse:.1f}")
+            model, scaler = train_model(X, y)
             
             st.subheader("Optimized Trim:")
             avg_displacement = df['DISPLACEMENT'].mean()
@@ -114,7 +109,7 @@ def main():
                 best_drafts, best_consumption = optimize_drafts(model, scaler, speed, avg_displacement, min_fwd, max_fwd, min_aft, max_aft)
                 trim = best_drafts[1] - best_drafts[0]
                 optimized_trims.append({
-                    'Speed': speed,
+                    'Speed': round(speed, 1),
                     'Trim': round(trim, 1),
                     'Estimated Consumption': round(best_consumption, 1)
                 })
