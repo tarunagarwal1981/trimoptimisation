@@ -116,11 +116,12 @@ def main():
                 for speed in range(9, 14):
                     best_drafts, best_consumption = optimize_drafts(model, scaler, speed, avg_displacement, min_fwd, max_fwd, min_aft, max_aft)
                     trim = round(best_drafts[1] - best_drafts[0], 1)
-                    optimized_trims.append({
-                        'Speed': speed,
-                        'Trim': trim,
-                        'Estimated Consumption': round(best_consumption, 1)
-                    })
+                    if trim <= 3:
+                        optimized_trims.append({
+                            'Speed': speed,
+                            'Trim': trim,
+                            'Estimated Consumption': round(best_consumption, 1)
+                        })
                 
                 st.table(pd.DataFrame(optimized_trims))
 
