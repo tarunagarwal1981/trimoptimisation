@@ -4,7 +4,7 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.metrics import mean_squared_error
 import psycopg2
 import os
 from datetime import datetime, timedelta
@@ -55,9 +55,8 @@ def train_model(X, y):
     
     y_pred = model.predict(X_test_scaled)
     mse = mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
     
-    return model, scaler, mse, r2
+    return model, scaler, mse
 
 def optimize_drafts(model, scaler, speed, displacement, min_fwd, max_fwd, min_aft, max_aft):
     def objective_function(drafts):
@@ -110,35 +109,29 @@ def main():
                 X = condition_df[['SPEED', 'DRAFTFWD', 'DRAFTAFT', 'DISPLACEMENT', 'TRIM', 'MEAN_DRAFT']]
                 y = condition_df['ME_CONSUMPTION']
                 
-                model, scaler, mse, r2 = train_model(X, y)
-                st.write(f"Model performance: MSE = {mse:.4f}, R2 = {r2:.4f}")
+                model, scaler, mse = train_model(X, y)
+                st.write(f"Model performance: MSE = {mse:.4f}")
                 
-                st.subheader(f"Optimized Drafts for {condition} Condition:")
+                st.subheader(f"Optimized Trim for {condition} Condition:")
                 avg_displacement = condition_df['DISPLACEMENT'].mean()
                 min_fwd, max_fwd = condition_df['DRAFTFWD'].min(), condition_df['DRAFTFWD'].max()
                 min_aft, max_aft = condition_df['DRAFTAFT'].min(), condition_df['DRAFTAFT'].max()
                 
-                optimized_drafts = []
+                optimized_trims = []
                 for speed in range(9, 14):
                     best_drafts, best_consumption = optimize_drafts(model, scaler, speed, avg_displacement, min_fwd, max_fwd, min_aft, max_aft)
-                    optimized_drafts.append({
+                    trim = best_drafts[1] - best_drafts[0]
+                    optimized_trims.append({
                         'Speed': speed,
-                        'FWD Draft': round(best_drafts[0], 2),
-                        'AFT Draft': round(best_drafts[1], 2),
-                        'Estimated Consumption': round(best_consumption, 2)
+                        'Trim': round(trim, 2),
+                        'Estimated Consumption': round(best_consumption, 1)
                     })
                 
-                st.table(pd.DataFrame(optimized_drafts))
+                st.table(pd.DataFrame(optimized_trims))
 
                 # Validation checks
-                if any(draft['FWD Draft'] > draft['AFT Draft'] for draft in optimized_drafts):
-                    st.warning("Warning: Some optimized forward drafts are greater than aft drafts. This may indicate an issue with the optimization process.")
-
-                if any(draft['FWD Draft'] < min_fwd or draft['FWD Draft'] > max_fwd or 
-                       draft['AFT Draft'] < min_aft or draft['AFT Draft'] > max_aft for draft in optimized_drafts):
-                    st.warning("Warning: Some optimized drafts are outside the range of the input data. This may indicate an issue with the optimization process.")
-
-                st.write(f"Input data draft ranges: FWD [{min_fwd:.2f}, {max_fwd:.2f}], AFT [{min_aft:.2f}, {max_aft:.2f}]")
+                if any(trim['Trim'] < 0 for trim in optimized_trims):
+                    st.warning("Warning: Some optimized trims are negative. This may indicate an issue with the optimization process.")
 
 if __name__ == "__main__":
     main()
